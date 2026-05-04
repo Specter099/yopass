@@ -5,12 +5,33 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // HTTPClient allows modifying the underlying http.Client.
-var HTTPClient = http.DefaultClient
+//
+// The default client uses a Transport with bounded connection, TLS handshake,
+// and response-header timeouts so a malicious or unhealthy server cannot hang
+// the CLI indefinitely. The overall request body read is intentionally
+// unbounded so that file fetches over slow links still succeed.
+var HTTPClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+	},
+}
 
 // ServerError represents a yopass server error.
 type ServerError struct {

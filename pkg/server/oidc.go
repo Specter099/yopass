@@ -348,17 +348,45 @@ func (y *Server) oidcCallbackHandler(w http.ResponseWriter, r *http.Request) {
 	rp.CodeExchangeHandler(rp.UserinfoCallback(y.oidcUserinfoCallback), y.OIDCProvider)(w, r)
 }
 
-// oidcLogoutHandler clears the session and redirects to the home page.
+// oidcLogoutHandler clears the session.
+//
+// The handler requires the X-Requested-With: yopass header to defeat CSRF.
+// In cross-origin deployments the session cookie uses SameSite=None, which
+// makes a "simple" cross-site form POST able to log the user out. Custom
+// headers are not on the CORS-safelist, so a fetch sending this header
+// triggers a preflight that the corsMiddleware will only approve for the
+// configured frontend origin.
+//
+// The handler returns 204 (no redirect) so the caller can decide where to
+// navigate after logout — the website does this client-side.
 func (y *Server) oidcLogoutHandler(w http.ResponseWriter, r *http.Request) {
+	clientIP := y.getRealClientIP(r)
+	if r.Header.Get("X-Requested-With") != "yopass" {
+		y.audit().Log(AuditEvent{
+			Timestamp: time.Now().UTC(), Event: "auth.logout", Outcome: OutcomeDenied,
+			ClientIP: clientIP, Error: "missing X-Requested-With header",
+		})
+		writeJSONError(w, `{"message": "missing X-Requested-With header"}`, http.StatusForbidden)
+		return
+	}
 	session, _ := y.getSession(r) // read before clearing so audit captures identity
 	y.clearSession(w, r)
 	y.audit().Log(AuditEvent{
 		Timestamp: time.Now().UTC(), Event: "auth.logout", Outcome: OutcomeSuccess,
-		ClientIP:    y.getRealClientIP(r),
+		ClientIP:    clientIP,
 		UserEmail:   sessionEmail(session),
 		UserSubject: sessionSub(session),
 	})
-	http.Redirect(w, r, homeURL(), http.StatusFound)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// oidcLogoutOptionsHandler responds to CORS preflight requests for /auth/logout
+// so legitimate cross-origin fetches from the configured frontend can include
+// the X-Requested-With header. Same-origin fetches do not preflight.
+func (y *Server) oidcLogoutOptionsHandler(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Requested-With")
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // oidcMeHandler returns the current user's info or 401 if not authenticated.

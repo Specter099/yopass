@@ -89,29 +89,41 @@ export default function Navbar() {
 
             {OIDC_ENABLED &&
               (isAuthenticated ? (
-                <form method="POST" action={`${backendDomain}/auth/logout`}>
-                  <button
-                    type="submit"
-                    className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-base-content/70 hover:text-base-content hover:bg-base-200 rounded-md transition-all duration-200"
-                    title={t('auth.logout')}
+                <button
+                  type="button"
+                  onClick={async () => {
+                    // The X-Requested-With header forces a CORS preflight on
+                    // cross-origin deployments, defeating CSRF logout attacks
+                    // that would otherwise work with SameSite=None cookies.
+                    try {
+                      await fetch(`${backendDomain}/auth/logout`, {
+                        method: 'POST',
+                        credentials: 'include',
+                        headers: { 'X-Requested-With': 'yopass' },
+                      });
+                    } finally {
+                      window.location.assign('/');
+                    }
+                  }}
+                  className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-base-content/70 hover:text-base-content hover:bg-base-200 rounded-md transition-all duration-200"
+                  title={t('auth.logout')}
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    strokeWidth={1.5}
+                    stroke="currentColor"
+                    className="w-5 h-5"
                   >
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      strokeWidth={1.5}
-                      stroke="currentColor"
-                      className="w-5 h-5"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15M12 9l-3 3m0 0 3 3m-3-3h12.75"
-                      />
-                    </svg>
-                    {t('auth.logout')}
-                  </button>
-                </form>
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15M12 9l-3 3m0 0 3 3m-3-3h12.75"
+                    />
+                  </svg>
+                  {t('auth.logout')}
+                </button>
               ) : (
                 <a
                   href={`${backendDomain}/auth/login`}
