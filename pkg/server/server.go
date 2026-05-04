@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -49,10 +50,28 @@ func (y *Server) createSecret(w http.ResponseWriter, request *http.Request) {
 	session, _ := y.getSession(request)
 	clientIP := y.getRealClientIP(request)
 
+	// Cap the JSON body so an attacker can't allocate arbitrary memory by
+	// sending a huge "message" string before the post-decode length check runs.
+	// The cap is the max ciphertext length plus a small allowance for the
+	// surrounding JSON envelope (field names, quoting, escaping, options).
+	const jsonOverheadAllowance = 4096
+	bodyLimit := int64(y.MaxLength) + jsonOverheadAllowance
+	request.Body = http.MaxBytesReader(w, request.Body, bodyLimit)
+
 	decoder := json.NewDecoder(request.Body)
 	var s yopass.Secret
 	if err := decoder.Decode(&s); err != nil {
 		y.Logger.Debug("Unable to decode request", zap.Error(err))
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			y.audit().Log(AuditEvent{
+				Timestamp: time.Now().UTC(), Event: "secret.created", Outcome: OutcomeFailure,
+				ClientIP: clientIP, UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
+				Error: "request body too large",
+			})
+			http.Error(w, `{"message": "Request body too large"}`, http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, `{"message": "Unable to parse json"}`, http.StatusBadRequest)
 		return
 	}
@@ -534,6 +553,7 @@ func (y *Server) HTTPHandler() http.Handler {
 		mx.HandleFunc("/auth/login", y.oidcLoginHandler).Methods(http.MethodGet)
 		mx.HandleFunc("/auth/callback", y.oidcCallbackHandler).Methods(http.MethodGet)
 		mx.HandleFunc("/auth/logout", y.oidcLogoutHandler).Methods(http.MethodPost)
+		mx.HandleFunc("/auth/logout", y.oidcLogoutOptionsHandler).Methods(http.MethodOptions)
 		mx.HandleFunc("/auth/me", y.oidcMeHandler).Methods(http.MethodGet)
 	}
 
@@ -560,7 +580,7 @@ func (y *Server) HTTPHandler() http.Handler {
 	mx.HandleFunc("/logo", y.logoHandler).Methods(http.MethodGet)
 
 	mx.PathPrefix("/").Handler(http.FileServer(http.Dir(y.AssetPath)))
-	return handlers.CustomLoggingHandler(nil, SecurityHeadersHandler(mx), y.httpLogFormatter())
+	return handlers.CustomLoggingHandler(nil, y.securityHeadersHandler(mx), y.httpLogFormatter())
 }
 
 const keyParameter = "{key:(?:[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}|[a-zA-Z0-9]{22})}"
@@ -625,15 +645,24 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// SecurityHeadersHandler returns a middleware which sets common security
+// securityHeadersHandler returns a middleware which sets common security
 // HTTP headers on the response to mitigate common web vulnerabilities.
-func SecurityHeadersHandler(next http.Handler) http.Handler {
+//
+// HSTS is only emitted when the request is genuinely over HTTPS. When trusted
+// proxies are configured, X-Forwarded-Proto is honoured only from those
+// peers, matching the same gating used for cookie Secure attributes
+// (see isSecure). With no trusted proxies configured the header is still
+// honoured to preserve existing behaviour for operators who terminate TLS
+// at a reverse proxy without setting --trusted-proxies.
+func (y *Server) securityHeadersHandler(next http.Handler) http.Handler {
 	csp := []string{
 		"default-src 'self'",
+		"base-uri 'self'",
 		"font-src 'self' data:",
 		"form-action 'self'",
 		"frame-ancestors 'none'",
 		"img-src 'self' data:",
+		"object-src 'none'",
 		"script-src 'self'",
 		"style-src 'self' 'unsafe-inline'",
 	}
@@ -644,7 +673,7 @@ func SecurityHeadersHandler(next http.Handler) http.Handler {
 		w.Header().Set("x-content-type-options", "nosniff")
 		w.Header().Set("x-frame-options", "DENY")
 		w.Header().Set("x-xss-protection", "1; mode=block")
-		if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+		if y.isSecure(r) {
 			w.Header().Set("strict-transport-security", "max-age=31536000")
 		}
 		next.ServeHTTP(w, r)

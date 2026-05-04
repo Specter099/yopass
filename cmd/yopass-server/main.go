@@ -259,6 +259,13 @@ func main() {
 	var cookieCodec *securecookie.SecureCookie
 	if oidcProvider != nil {
 		sessionKey := viper.GetString("oidc-session-key")
+		if sessionKey != "" && len(sessionKey) != 128 {
+			// A non-empty key with the wrong length silently falls back to ephemeral
+			// random keys, which breaks sessions across instances behind a load
+			// balancer. Warn loudly so this misconfiguration is visible.
+			logger.Warn("--oidc-session-key has wrong length; expected 128 hex characters (generate with: openssl rand -hex 64). Falling back to ephemeral keys — multi-instance deployments will not share sessions.",
+				zap.Int("provided_length", len(sessionKey)))
+		}
 		if len(sessionKey) == 128 {
 			if _, err := hex.DecodeString(sessionKey); err != nil {
 				logger.Fatal("--oidc-session-key is 128 characters but not valid hex; generate with: openssl rand -hex 64")
@@ -355,9 +362,15 @@ func main() {
 	}
 
 	yopassSrv := &http.Server{
-		Addr:      fmt.Sprintf("%s:%d", viper.GetString("address"), viper.GetInt("port")),
-		Handler:   y.HTTPHandler(),
-		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+		Addr:    fmt.Sprintf("%s:%d", viper.GetString("address"), viper.GetInt("port")),
+		Handler: y.HTTPHandler(),
+		// ReadHeaderTimeout bounds the headers-read phase to defeat Slowloris-style
+		// attacks. Body and write phases are intentionally unbounded so large file
+		// uploads/downloads on slow connections still complete. IdleTimeout caps
+		// keep-alive lifetime so dormant connections don't pin server resources.
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12},
 	}
 	go func() {
 		logger.Info("Starting yopass server", zap.String("address", yopassSrv.Addr))
@@ -369,8 +382,10 @@ func main() {
 	}()
 
 	metricsServer := &http.Server{
-		Addr:    fmt.Sprintf("%s:%d", viper.GetString("address"), viper.GetInt("metrics-port")),
-		Handler: metricsHandler(registry),
+		Addr:              fmt.Sprintf("%s:%d", viper.GetString("address"), viper.GetInt("metrics-port")),
+		Handler:           metricsHandler(registry),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 	if port := viper.GetInt("metrics-port"); port > 0 {
 		go func() {
