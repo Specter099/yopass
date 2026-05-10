@@ -3,22 +3,34 @@ import "source-map-support/register";
 import * as cdk from "aws-cdk-lib";
 import { CdkStack } from "../lib/cdk-stack";
 
+/**
+ * Configuration is read from CDK context (cdk.json or `-c name=value`) or
+ * environment variables:
+ *
+ *   domainName       (required) — public hostname, e.g. yopass.example.com
+ *   hostedZoneName   (optional) — Route 53 zone, e.g. example.com.
+ *                                 When set, an A-record alias is created.
+ *
+ * The stack MUST deploy in us-east-1 because CloudFront's ACM certificate
+ * lives there. Override via CDK_DEFAULT_REGION or pass --region accordingly.
+ */
 const app = new cdk.App();
-new CdkStack(app, "CdkStack", {
-  /* If you don't specify 'env', this stack will be environment-agnostic.
-   * Account/Region-dependent features and context lookups will not work,
-   * but a single synthesized template can be deployed anywhere. */
 
-  /* Uncomment the next line to specialize this stack for the AWS Account
-   * and Region that are implied by the current CLI configuration. */
+const domainName =
+  app.node.tryGetContext("domainName") ?? process.env.YOPASS_DOMAIN_NAME;
+if (!domainName) {
+  throw new Error(
+    "domainName is required: set it in cdk.json context or pass -c domainName=yopass.example.com",
+  );
+}
+const hostedZoneName =
+  app.node.tryGetContext("hostedZoneName") ?? process.env.YOPASS_HOSTED_ZONE;
+
+new CdkStack(app, "CdkStack", {
   env: {
     account: process.env.CDK_DEFAULT_ACCOUNT,
-    region: "eu-west-1",
+    region: process.env.CDK_DEFAULT_REGION ?? "us-east-1",
   },
-
-  /* Uncomment the next line if you know exactly what Account and Region you
-   * want to deploy the stack to. */
-  // env: { account: '123456789012', region: 'us-east-1' },
-
-  /* For more information, see https://docs.aws.amazon.com/cdk/latest/guide/environments.html */
+  domainName,
+  hostedZoneName,
 });
