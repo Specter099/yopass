@@ -556,3 +556,44 @@ func TestPerformHealthCheck(t *testing.T) {
 	}
 }
 
+// TestIsValidCSSColorValue pins the value-character allowlist for custom
+// theme variables. Color values may contain letters, digits, whitespace,
+// and . , ( ) # % - /. Anything else (notably ;, {, }, :, *) would let a
+// malicious operator config inject arbitrary CSS rules through the
+// browser-side <style> element written by ThemeProvider.
+func TestIsValidCSSColorValue(t *testing.T) {
+	valid := []string{
+		"red",
+		"#1a2b3c",
+		"#fff",
+		"rgb(10, 20, 30)",
+		"rgba(10, 20, 30, 0.5)",
+		"hsl(120, 50%, 50%)",
+		"oklch(0.5 0.2 30)",
+		"oklch(0.5 0.2 30 / 50%)",
+		"color-mix(in srgb, red 50%, blue)",
+	}
+	invalid := []string{
+		"",
+		"red; --evil: stolen",
+		"red} html { display:none",
+		"url(javascript:alert(1))",
+		"blue\nyellow",
+		"red /* comment */",
+		"red:blue",
+		"red*",
+		`red"`,
+	}
+
+	for _, v := range valid {
+		if !isValidCSSColorValue(v) {
+			t.Errorf("expected %q to be valid", v)
+		}
+	}
+	for _, v := range invalid {
+		if isValidCSSColorValue(v) {
+			t.Errorf("expected %q to be REJECTED", v)
+		}
+	}
+}
+

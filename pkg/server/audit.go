@@ -52,7 +52,12 @@ func NewNoopAuditLogger() AuditLogger { return noopAuditLogger{} }
 
 // NewAuditLogger builds a zap-backed NDJSON audit logger.
 // An empty path writes to stdout; otherwise output goes to the given file path.
-func NewAuditLogger(path string) (AuditLogger, error) {
+//
+// When redactEmail is true, user_email values are written as a 12-char
+// SHA-256 prefix (mirroring secret_id) so logs remain correlatable across
+// events for the same user but the cleartext address is not retained.
+// This is for deployments whose retention policy treats email as PII.
+func NewAuditLogger(path string, redactEmail bool) (AuditLogger, error) {
 	cfg := zap.NewProductionConfig()
 	cfg.Encoding = "json"
 	cfg.EncoderConfig = zapcore.EncoderConfig{
@@ -73,10 +78,13 @@ func NewAuditLogger(path string) (AuditLogger, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &zapAuditLogger{l}, nil
+	return &zapAuditLogger{logger: l, redactEmail: redactEmail}, nil
 }
 
-type zapAuditLogger struct{ logger *zap.Logger }
+type zapAuditLogger struct {
+	logger      *zap.Logger
+	redactEmail bool
+}
 
 func (a *zapAuditLogger) Sync() error { return a.logger.Sync() }
 
@@ -91,7 +99,11 @@ func (a *zapAuditLogger) Log(e AuditEvent) {
 		fields = append(fields, zap.String("secret_id", redactSecretID(e.SecretID)))
 	}
 	if e.UserEmail != "" {
-		fields = append(fields, zap.String("user_email", e.UserEmail))
+		email := e.UserEmail
+		if a.redactEmail {
+			email = redactSecretID(email)
+		}
+		fields = append(fields, zap.String("user_email", email))
 	}
 	if e.UserSubject != "" {
 		fields = append(fields, zap.String("user_subject", e.UserSubject))
