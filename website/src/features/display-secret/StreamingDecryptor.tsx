@@ -40,9 +40,13 @@ export default function StreamingDecryptor({
     setProgress(0);
 
     try {
-      // Fetch the encrypted binary stream
+      // Fetch the encrypted binary stream. X-Requested-With satisfies the
+      // server's CSRF guard on the consume endpoint.
       const response = await fetch(`${backendDomain}/file/${secretKey}`, {
-        headers: { Accept: 'application/octet-stream' },
+        headers: {
+          Accept: 'application/octet-stream',
+          'X-Requested-With': 'yopass',
+        },
         ...crossOriginCredentials(OIDC_ENABLED),
       });
 

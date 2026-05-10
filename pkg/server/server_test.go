@@ -180,6 +180,39 @@ sbfqaG/iDbp+qDOc98IagMyPrEqKDxnhVVOraXy5dD9RDsntLso=
 	}
 }
 
+// TestConsumeRequiresCSRFHeader verifies that consume/delete endpoints reject
+// requests missing the X-Requested-With: yopass header. This defeats CSRF via
+// <img>/<link>/form GET that would otherwise burn one-time secrets.
+func TestConsumeRequiresCSRFHeader(t *testing.T) {
+	const key = "ebfa0c88-7610-4d3f-856a-c8810a44361c"
+
+	cases := []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{"GET /secret without header", http.MethodGet, "/secret/" + key},
+		{"DELETE /secret without header", http.MethodDelete, "/secret/" + key},
+		{"GET /file without header", http.MethodGet, "/file/" + key},
+		{"DELETE /file without header", http.MethodDelete, "/file/" + key},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			y := newTestServer(t, &mockDB{}, 1, false)
+			h := y.HTTPHandler()
+
+			req := httptest.NewRequest(tc.method, tc.path, nil)
+			rr := httptest.NewRecorder()
+			h.ServeHTTP(rr, req)
+
+			if rr.Code != http.StatusForbidden {
+				t.Fatalf("expected 403 for %s without CSRF header, got %d", tc.path, rr.Code)
+			}
+		})
+	}
+}
+
 // TestCreateSecretBodyTooLarge verifies that a request body which exceeds the
 // max-length budget is rejected with 413 before the JSON body is fully decoded
 // into memory. This guards against a memory-exhaustion DoS where an attacker
@@ -295,6 +328,7 @@ func TestGetSecret(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			req.Header.Set("X-Requested-With", "yopass")
 			rr := httptest.NewRecorder()
 			y := newTestServer(t, tc.db, 1, false)
 			y.getSecret(rr, req)
@@ -346,6 +380,7 @@ func TestDeleteSecret(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			req.Header.Set("X-Requested-With", "yopass")
 			rr := httptest.NewRecorder()
 			y := newTestServer(t, tc.db, 1, false)
 			y.deleteSecret(rr, req)
@@ -385,6 +420,7 @@ func TestMetrics(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		req.Header.Set("X-Requested-With", "yopass")
 		rr := httptest.NewRecorder()
 		h.ServeHTTP(rr, req)
 	}
@@ -895,7 +931,7 @@ func TestOptionsSecret(t *testing.T) {
 	expectedHeaders := map[string]string{
 		"Access-Control-Allow-Origin":  "*",
 		"Access-Control-Allow-Methods": "POST, OPTIONS",
-		"Access-Control-Allow-Headers": "content-type",
+		"Access-Control-Allow-Headers": "Content-Type, X-Requested-With",
 	}
 
 	for header, expected := range expectedHeaders {
@@ -1028,14 +1064,15 @@ sbfqaG/iDbp+qDOc98IagMyPrEqKDxnhVVOraXy5dD9RDsntLso=
 
 func TestGetSecretWriteError(t *testing.T) {
 	server := newTestServer(t, &mockDB{}, 1000, false)
-	
+
 	req := httptest.NewRequest("GET", "/secret/test", nil)
+	req.Header.Set("X-Requested-With", "yopass")
 	req = mux.SetURLVars(req, map[string]string{"key": "test"})
-	
+
 	// Use error writer to trigger the error path
 	recorder := httptest.NewRecorder()
 	errWriter := &errorWriter{ResponseWriter: recorder}
-	
+
 	server.getSecret(errWriter, req)
 	
 	// The function should complete even with write error (error is just logged)
@@ -1746,6 +1783,10 @@ sbfqaG/iDbp+qDOc98IagMyPrEqKDxnhVVOraXy5dD9RDsntLso=
 			} else {
 				req = httptest.NewRequest(tt.method, tt.path, nil)
 			}
+			// Consume endpoints (GET/DELETE on /secret and /file) require the
+			// CSRF header. Setting it on every request is safe — handlers that
+			// don't check it ignore it.
+			req.Header.Set("X-Requested-With", "yopass")
 			rr := httptest.NewRecorder()
 
 			handler.ServeHTTP(rr, req)

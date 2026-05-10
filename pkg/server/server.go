@@ -45,6 +45,30 @@ func writeJSONError(w http.ResponseWriter, body string, code int) {
 	_, _ = w.Write([]byte(body))
 }
 
+// requireCSRFHeader returns true and writes a 403 response if the request is
+// missing the X-Requested-With: yopass header.
+//
+// The check defeats CSRF on consume endpoints (where a one-time GET deletes
+// the secret, or a DELETE removes it). Plain HTML elements like <img>, <link>,
+// <script> and form GET/POST cannot set custom headers, and fetch/XHR with
+// custom headers triggers a CORS preflight that the corsMiddleware will only
+// approve for the configured frontend origin. Same-origin clients (the bundled
+// website, the CLI) set the header explicitly.
+func (y *Server) requireCSRFHeader(w http.ResponseWriter, r *http.Request, event, secretID string) bool {
+	if r.Header.Get("X-Requested-With") == "yopass" {
+		return false
+	}
+	session, _ := y.getSession(r)
+	y.audit().Log(AuditEvent{
+		Timestamp: time.Now().UTC(), Event: event, Outcome: OutcomeDenied,
+		ClientIP: y.getRealClientIP(r), SecretID: secretID,
+		UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
+		Error: "missing X-Requested-With header",
+	})
+	writeJSONError(w, `{"message": "missing X-Requested-With header"}`, http.StatusForbidden)
+	return true
+}
+
 // createSecret creates secret
 func (y *Server) createSecret(w http.ResponseWriter, request *http.Request) {
 	session, _ := y.getSession(request)
@@ -169,6 +193,9 @@ func (y *Server) getSecret(w http.ResponseWriter, request *http.Request) {
 	w.Header().Set("Cache-Control", "private, no-cache")
 
 	secretKey := mux.Vars(request)["key"]
+	if y.requireCSRFHeader(w, request, "secret.accessed", secretKey) {
+		return
+	}
 	session, sessionErr := y.getSession(request)
 	clientIP := y.getRealClientIP(request)
 
@@ -291,6 +318,9 @@ func (y *Server) getSecretStatus(w http.ResponseWriter, request *http.Request) {
 // deleteSecret from database
 func (y *Server) deleteSecret(w http.ResponseWriter, request *http.Request) {
 	secretKey := mux.Vars(request)["key"]
+	if y.requireCSRFHeader(w, request, "secret.deleted", secretKey) {
+		return
+	}
 	session, sessionErr := y.getSession(request)
 	clientIP := y.getRealClientIP(request)
 
@@ -360,10 +390,17 @@ func (y *Server) deleteSecret(w http.ResponseWriter, request *http.Request) {
 	w.WriteHeader(204)
 }
 
-// optionsSecret handle the Options http method by returning the correct CORS headers
+// optionsSecret handles CORS preflight for the create endpoint.
 func (y *Server) optionsSecret(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "content-type")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Requested-With")
+}
+
+// secretOptions handles CORS preflight for the consume/delete endpoints,
+// allowing the X-Requested-With CSRF header.
+func (y *Server) secretOptions(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Access-Control-Allow-Methods", "GET, DELETE, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Requested-With")
 }
 
 func (y *Server) configHandler(w http.ResponseWriter, r *http.Request) {
@@ -544,6 +581,7 @@ func (y *Server) HTTPHandler() http.Handler {
 	}
 	mx.HandleFunc("/secret/"+keyParameter, y.getSecret).Methods(http.MethodGet)
 	mx.HandleFunc("/secret/"+keyParameter, y.deleteSecret).Methods(http.MethodDelete)
+	mx.HandleFunc("/secret/"+keyParameter, y.secretOptions).Methods(http.MethodOptions)
 
 	mx.HandleFunc("/config", y.configHandler).Methods(http.MethodGet)
 	mx.HandleFunc("/config", y.optionsSecret).Methods(http.MethodOptions)

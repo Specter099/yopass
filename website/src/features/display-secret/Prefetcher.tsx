@@ -72,7 +72,11 @@ export default function Prefetcher() {
     setSecretError(null);
     (async () => {
       try {
+        // X-Requested-With satisfies the server's CSRF guard. Same-origin
+        // fetches do not preflight; cross-origin fetches preflight and the
+        // server only approves the configured frontend origin.
         const request = await fetch(secretUrl, {
+          headers: { 'X-Requested-With': 'yopass' },
           ...crossOriginCredentials(OIDC_ENABLED),
         });
         if (request.status === 401) {

@@ -51,10 +51,20 @@ type serverResponse struct {
 }
 
 // Fetch retrieves a secret by its ID from the specified server.
+//
+// The X-Requested-With header is required by the server's CSRF guard on
+// consume endpoints; it forces a CORS preflight on cross-origin browser
+// requests, blocking <img>/<link>-style attacks that would otherwise burn
+// one-time secrets without the recipient's involvement.
 func Fetch(server string, id string) (string, error) {
 	server = strings.TrimSuffix(server, "/")
 
-	resp, err := HTTPClient.Get(server + "/secret/" + id)
+	req, err := http.NewRequest(http.MethodGet, server+"/secret/"+id, nil)
+	if err != nil {
+		return "", fmt.Errorf("could not create request: %w", err)
+	}
+	req.Header.Set("X-Requested-With", "yopass")
+	resp, err := HTTPClient.Do(req)
 	if err != nil {
 		return "", &ServerError{err: err}
 	}
@@ -106,6 +116,7 @@ func FetchFile(server string, id string) ([]byte, error) {
 		return nil, fmt.Errorf("could not create request: %w", err)
 	}
 	req.Header.Set("Accept", "application/octet-stream")
+	req.Header.Set("X-Requested-With", "yopass")
 
 	resp, err := HTTPClient.Do(req)
 	if err != nil {

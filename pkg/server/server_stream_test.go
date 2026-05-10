@@ -211,6 +211,7 @@ func TestStreamDownload(t *testing.T) {
 	// Download
 	req := httptest.NewRequest("GET", "/file/"+key, nil)
 	req.Header.Set("Accept", "application/octet-stream")
+	req.Header.Set("X-Requested-With", "yopass")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
@@ -235,6 +236,7 @@ func TestStreamDownloadNotFound(t *testing.T) {
 	handler := srv.HTTPHandler()
 
 	req := httptest.NewRequest("GET", "/file/00000000-0000-0000-0000-000000000000", nil)
+	req.Header.Set("X-Requested-With", "yopass")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
@@ -261,6 +263,7 @@ func TestStreamDownloadOneTime(t *testing.T) {
 
 	// First download should work
 	req = httptest.NewRequest("GET", "/file/"+key, nil)
+	req.Header.Set("X-Requested-With", "yopass")
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	if w.Code != 200 {
@@ -269,6 +272,7 @@ func TestStreamDownloadOneTime(t *testing.T) {
 
 	// Second download should fail (one-time stream is deleted after first successful download)
 	req = httptest.NewRequest("GET", "/file/"+key, nil)
+	req.Header.Set("X-Requested-With", "yopass")
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	// Both the stream metadata and the file data are deleted after the first one-time download
@@ -286,6 +290,7 @@ func TestDeleteStreamSecret(t *testing.T) {
 
 	// Delete
 	req := httptest.NewRequest("DELETE", "/file/"+key, nil)
+	req.Header.Set("X-Requested-With", "yopass")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
@@ -295,6 +300,7 @@ func TestDeleteStreamSecret(t *testing.T) {
 
 	// Verify gone
 	req = httptest.NewRequest("GET", "/file/"+key, nil)
+	req.Header.Set("X-Requested-With", "yopass")
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	if w.Code != 404 {
@@ -308,6 +314,7 @@ func TestDeleteStreamSecretNotFound(t *testing.T) {
 	handler := srv.HTTPHandler()
 
 	req := httptest.NewRequest("DELETE", "/file/00000000-0000-0000-0000-000000000000", nil)
+	req.Header.Set("X-Requested-With", "yopass")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
@@ -439,6 +446,7 @@ func TestStreamDownloadOneTimeConcurrent(t *testing.T) {
 			defer wg.Done()
 			<-start
 			r := httptest.NewRequest("GET", "/file/"+key, nil)
+			r.Header.Set("X-Requested-With", "yopass")
 			w := httptest.NewRecorder()
 			handler.ServeHTTP(w, r)
 			if w.Code == 200 {
