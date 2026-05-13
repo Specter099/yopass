@@ -65,8 +65,10 @@ export class CdkStack extends cdk.Stack {
       partitionKey: { name: "id", type: dynamo.AttributeType.STRING },
       timeToLiveAttribute: "ttl",
       billingMode: dynamo.BillingMode.PAY_PER_REQUEST,
-      // Retain the table on stack deletion; secrets expire on their own via TTL.
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      // Destroy on stack deletion. Secrets in this DB are short-lived (TTL),
+      // so there's nothing worth retaining; RETAIN orphans the table on a
+      // failed first-deploy and blocks subsequent attempts.
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
     // Lambda (Go binary built into deployment.zip via npm run build)
@@ -106,12 +108,28 @@ export class CdkStack extends cdk.Stack {
 
     // S3 bucket for SPA assets. Private; CloudFront reads via Origin Access
     // Control. No public access, ever.
+    //
+    // Uses an S3 account-regional-namespace bucket: name must end with `-an`
+    // and the CFN resource needs `BucketNamespace: account-regional`. The CDK
+    // L2 doesn't expose BucketNamespace yet, so we set it via the L1 escape
+    // hatch. Account-regional bucket names are reserved to this account, so
+    // the same name works in any region without global-namespace contention.
+    const bucketName = `yopass-spa-${this.account}-${this.region}-an`;
     const spaBucket = new s3.Bucket(this, "SPABucket", {
+      bucketName,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       encryption: s3.BucketEncryption.S3_MANAGED,
       enforceSSL: true,
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      // SPA assets are reproduced from the build on every deploy, so there's
+      // no value in retaining the bucket. autoDeleteObjects empties it before
+      // CFN deletes the bucket itself.
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
     });
+    (spaBucket.node.defaultChild as s3.CfnBucket).addPropertyOverride(
+      "BucketNamespace",
+      "account-regional",
+    );
 
     // CloudFront-facing certificate (must be in us-east-1).
     const cert = new acm.Certificate(this, "Certificate", {
