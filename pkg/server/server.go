@@ -235,29 +235,25 @@ func (y *Server) getSecret(w http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if secret.OneTime {
-		deleted, err := y.DB.Delete(secretKey)
-		if err != nil {
-			y.Logger.Error("Failed to delete one-time secret", zap.Error(err))
-			y.audit().Log(AuditEvent{
-				Timestamp: time.Now().UTC(), Event: "secret.accessed", Outcome: OutcomeFailure,
-				ClientIP: clientIP, SecretID: secretKey, OneTime: boolPtr(true),
-				UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
-				Error: "failed to claim one-time secret",
-			})
-			http.Error(w, `{"message": "Failed to process secret"}`, http.StatusInternalServerError)
-			return
-		}
-		if !deleted {
-			y.audit().Log(AuditEvent{
-				Timestamp: time.Now().UTC(), Event: "secret.accessed", Outcome: OutcomeDenied,
-				ClientIP: clientIP, SecretID: secretKey, OneTime: boolPtr(true),
-				UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
-				Error: "claimed by concurrent request",
-			})
-			http.Error(w, `{"message": "Secret not found"}`, http.StatusNotFound)
-			return
-		}
+	// Status() above only returned metadata (one_time, require_auth). Fetch
+	// the actual ciphertext now that auth has passed. For one-time secrets
+	// the Database implementation deletes the item as part of Get, providing
+	// the same single-claim guarantee the previous explicit Delete call did.
+	wasOneTime, wasRequireAuth := secret.OneTime, secret.RequireAuth
+	secret, err = y.DB.Get(secretKey)
+	if err != nil {
+		// Most common cause: the item was claimed by a concurrent request
+		// between the Status check and this Get. Treat as not-found.
+		y.Logger.Debug("Secret unavailable after auth check", zap.Error(err))
+		y.audit().Log(AuditEvent{
+			Timestamp: time.Now().UTC(), Event: "secret.accessed", Outcome: OutcomeFailure,
+			ClientIP: clientIP, SecretID: secretKey,
+			OneTime: boolPtr(wasOneTime), RequireAuth: boolPtr(wasRequireAuth),
+			UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
+			Error: "not found",
+		})
+		http.Error(w, `{"message": "Secret not found"}`, http.StatusNotFound)
+		return
 	}
 
 	data, err := secret.ToJSON()
