@@ -5,12 +5,33 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // HTTPClient allows modifying the underlying http.Client.
-var HTTPClient = http.DefaultClient
+//
+// The default client uses a Transport with bounded connection, TLS handshake,
+// and response-header timeouts so a malicious or unhealthy server cannot hang
+// the CLI indefinitely. The overall request body read is intentionally
+// unbounded so that file fetches over slow links still succeed.
+var HTTPClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+	},
+}
 
 // ServerError represents a yopass server error.
 type ServerError struct {
@@ -30,10 +51,20 @@ type serverResponse struct {
 }
 
 // Fetch retrieves a secret by its ID from the specified server.
+//
+// The X-Requested-With header is required by the server's CSRF guard on
+// consume endpoints; it forces a CORS preflight on cross-origin browser
+// requests, blocking <img>/<link>-style attacks that would otherwise burn
+// one-time secrets without the recipient's involvement.
 func Fetch(server string, id string) (string, error) {
 	server = strings.TrimSuffix(server, "/")
 
-	resp, err := HTTPClient.Get(server + "/secret/" + id)
+	req, err := http.NewRequest(http.MethodGet, server+"/secret/"+id, nil)
+	if err != nil {
+		return "", fmt.Errorf("could not create request: %w", err)
+	}
+	req.Header.Set("X-Requested-With", "yopass")
+	resp, err := HTTPClient.Do(req)
 	if err != nil {
 		return "", &ServerError{err: err}
 	}
@@ -85,6 +116,7 @@ func FetchFile(server string, id string) ([]byte, error) {
 		return nil, fmt.Errorf("could not create request: %w", err)
 	}
 	req.Header.Set("Accept", "application/octet-stream")
+	req.Header.Set("X-Requested-With", "yopass")
 
 	resp, err := HTTPClient.Do(req)
 	if err != nil {

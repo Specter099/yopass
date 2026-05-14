@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -47,7 +48,7 @@ var licenseBrandingFlags = []string{
 }
 
 var licenseAuditFlags = []string{
-	"audit-log", "audit-log-file",
+	"audit-log", "audit-log-file", "audit-redact-email",
 }
 
 // flagSectionFiltered returns a temporary FlagSet containing only the flags
@@ -111,6 +112,7 @@ func init() {
 	pflag.String("frontend-url", "", "frontend base URL for post-login redirect in split deployments (e.g. http://localhost:3000)")
 	pflag.Bool("audit-log", false, "enable structured audit logging to NDJSON (requires valid license)")
 	pflag.String("audit-log-file", "", "file path for audit log output (default: stdout)")
+	pflag.Bool("audit-redact-email", false, "hash user_email in audit logs (12-char SHA-256 prefix) — preserves correlation but removes PII")
 	pflag.CommandLine.AddGoFlag(&flag.Flag{Name: "log-level", Usage: "Log level", Value: &logLevel})
 
 	for _, name := range licenseOIDCFlags {
@@ -208,10 +210,15 @@ func main() {
 		if err := json.Unmarshal([]byte(raw), &vars); err != nil {
 			logger.Fatal("invalid JSON for "+flagName, zap.Error(err))
 		}
-		for k := range vars {
+		for k, v := range vars {
 			if !strings.HasPrefix(k, "--color-") {
 				logger.Fatal(flagName+" contains invalid CSS variable key (must start with --color-)",
 					zap.String("key", k))
+			}
+			if !isValidCSSColorValue(v) {
+				logger.Fatal(flagName+" contains a value with disallowed characters; only color-value chars are permitted (letters, digits, whitespace, . , ( ) # % / -)",
+					zap.String("key", k),
+					zap.String("value", v))
 			}
 		}
 	}
@@ -259,6 +266,13 @@ func main() {
 	var cookieCodec *securecookie.SecureCookie
 	if oidcProvider != nil {
 		sessionKey := viper.GetString("oidc-session-key")
+		if sessionKey != "" && len(sessionKey) != 128 {
+			// A non-empty key with the wrong length silently falls back to ephemeral
+			// random keys, which breaks sessions across instances behind a load
+			// balancer. Warn loudly so this misconfiguration is visible.
+			logger.Warn("--oidc-session-key has wrong length; expected 128 hex characters (generate with: openssl rand -hex 64). Falling back to ephemeral keys — multi-instance deployments will not share sessions.",
+				zap.Int("provided_length", len(sessionKey)))
+		}
 		if len(sessionKey) == 128 {
 			if _, err := hex.DecodeString(sessionKey); err != nil {
 				logger.Fatal("--oidc-session-key is 128 characters but not valid hex; generate with: openssl rand -hex 64")
@@ -272,7 +286,7 @@ func main() {
 		if !licenseStatus.Valid {
 			logger.Fatal("--audit-log requires a valid license key")
 		}
-		al, err := server.NewAuditLogger(viper.GetString("audit-log-file"))
+		al, err := server.NewAuditLogger(viper.GetString("audit-log-file"), viper.GetBool("audit-redact-email"))
 		if err != nil {
 			logger.Fatal("failed to initialize audit logger", zap.Error(err))
 		}
@@ -355,9 +369,15 @@ func main() {
 	}
 
 	yopassSrv := &http.Server{
-		Addr:      fmt.Sprintf("%s:%d", viper.GetString("address"), viper.GetInt("port")),
-		Handler:   y.HTTPHandler(),
-		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+		Addr:    fmt.Sprintf("%s:%d", viper.GetString("address"), viper.GetInt("port")),
+		Handler: y.HTTPHandler(),
+		// ReadHeaderTimeout bounds the headers-read phase to defeat Slowloris-style
+		// attacks. Body and write phases are intentionally unbounded so large file
+		// uploads/downloads on slow connections still complete. IdleTimeout caps
+		// keep-alive lifetime so dormant connections don't pin server resources.
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12},
 	}
 	go func() {
 		logger.Info("Starting yopass server", zap.String("address", yopassSrv.Addr))
@@ -369,8 +389,10 @@ func main() {
 	}()
 
 	metricsServer := &http.Server{
-		Addr:    fmt.Sprintf("%s:%d", viper.GetString("address"), viper.GetInt("metrics-port")),
-		Handler: metricsHandler(registry),
+		Addr:              fmt.Sprintf("%s:%d", viper.GetString("address"), viper.GetInt("metrics-port")),
+		Handler:           metricsHandler(registry),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 	if port := viper.GetInt("metrics-port"); port > 0 {
 		go func() {
@@ -399,6 +421,22 @@ func main() {
 		logger.Error("failed to flush audit log on shutdown", zap.Error(err))
 	}
 	logger.Info("Server shut down")
+}
+
+// cssColorValueRe matches the character set legitimate color values need:
+// letters, digits, whitespace, and . , ( ) # % - /
+//
+// This is permissive enough for any modern color function — oklch(), rgb(),
+// hsl(), color-mix(), hex, named colors — while rejecting the metacharacters
+// (; { } : *) that allow rule-level CSS injection. The values are reflected
+// verbatim into a <style> rule on the client (ThemeProvider). React's
+// textContent prevents HTML injection, but without value validation a
+// malicious operator config could still close the declaration with ';' and
+// inject arbitrary CSS rules.
+var cssColorValueRe = regexp.MustCompile(`^[a-zA-Z0-9.,()#%/ -]+$`)
+
+func isValidCSSColorValue(s string) bool {
+	return s != "" && cssColorValueRe.MatchString(s)
 }
 
 // listenAndServe starts a HTTP server on the given addr. It uses TLS if both

@@ -29,6 +29,11 @@ func (db *testDB) Get(key string) (yopass.Secret, error) {
 	if !ok {
 		return yopass.Secret{}, fmt.Errorf("not found")
 	}
+	// Match production backends (Dynamo, Redis, Memcached): Get is destructive
+	// for one-time secrets. See the Database interface contract.
+	if s.OneTime {
+		delete(db.store, key)
+	}
 	return s, nil
 }
 

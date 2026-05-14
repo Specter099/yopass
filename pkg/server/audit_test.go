@@ -26,7 +26,7 @@ func TestRedactSecretID(t *testing.T) {
 }
 
 func TestNewAuditLogger_Stdout(t *testing.T) {
-	l, err := NewAuditLogger("")
+	l, err := NewAuditLogger("", false)
 	require.NoError(t, err)
 	require.NotNil(t, l)
 
@@ -46,7 +46,7 @@ func TestNewAuditLogger_File(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "audit.log")
 
-	l, err := NewAuditLogger(path)
+	l, err := NewAuditLogger(path, false)
 	require.NoError(t, err)
 
 	l.Log(AuditEvent{
@@ -86,11 +86,44 @@ func TestNewAuditLogger_File(t *testing.T) {
 	assert.Equal(t, redactSecretID("raw-secret-key"), secretID)
 }
 
+// TestNewAuditLogger_RedactEmail verifies that when redactEmail=true the
+// user_email field is hashed (12-char SHA-256 prefix) instead of written in
+// cleartext, while remaining stable so log analysis can correlate by user.
+func TestNewAuditLogger_RedactEmail(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.log")
+
+	l, err := NewAuditLogger(path, true)
+	require.NoError(t, err)
+
+	l.Log(AuditEvent{
+		Timestamp: time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC),
+		Event:     "secret.created",
+		Outcome:   OutcomeSuccess,
+		ClientIP:  "10.0.0.1",
+		UserEmail: "user@example.com",
+	})
+	_ = l.Sync()
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	var event map[string]any
+	require.NoError(t, json.Unmarshal(data, &event))
+
+	got, _ := event["user_email"].(string)
+	assert.Len(t, got, 12)
+	assert.NotEqual(t, "user@example.com", got)
+	assert.NotContains(t, got, "@")
+	// Stable hash so analysis tools can correlate events for the same user.
+	assert.Equal(t, redactSecretID("user@example.com"), got)
+}
+
 func TestNewAuditLogger_OptionalFieldsSuppressed(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "audit.log")
 
-	l, err := NewAuditLogger(path)
+	l, err := NewAuditLogger(path, false)
 	require.NoError(t, err)
 
 	l.Log(AuditEvent{
@@ -115,7 +148,7 @@ func TestNewAuditLogger_OptionalFieldsSuppressed(t *testing.T) {
 
 func TestNewAuditLogger_InvalidPath(t *testing.T) {
 	// A file inside a non-existent directory cannot be created by zap.
-	_, err := NewAuditLogger(filepath.Join(t.TempDir(), "does", "not", "exist", "audit.log"))
+	_, err := NewAuditLogger(filepath.Join(t.TempDir(), "does", "not", "exist", "audit.log"), false)
 	assert.Error(t, err)
 }
 
@@ -138,7 +171,7 @@ func TestServerAuditFallback(t *testing.T) {
 
 	// When set, returns the configured logger.
 	dir := t.TempDir()
-	real, err := NewAuditLogger(filepath.Join(dir, "a.log"))
+	real, err := NewAuditLogger(filepath.Join(dir, "a.log"), false)
 	require.NoError(t, err)
 	s.Audit = real
 	assert.Same(t, real, s.audit())

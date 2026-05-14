@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -44,15 +45,57 @@ func writeJSONError(w http.ResponseWriter, body string, code int) {
 	_, _ = w.Write([]byte(body))
 }
 
+// requireCSRFHeader returns true and writes a 403 response if the request is
+// missing the X-Requested-With: yopass header.
+//
+// The check defeats CSRF on consume endpoints (where a one-time GET deletes
+// the secret, or a DELETE removes it). Plain HTML elements like <img>, <link>,
+// <script> and form GET/POST cannot set custom headers, and fetch/XHR with
+// custom headers triggers a CORS preflight that the corsMiddleware will only
+// approve for the configured frontend origin. Same-origin clients (the bundled
+// website, the CLI) set the header explicitly.
+func (y *Server) requireCSRFHeader(w http.ResponseWriter, r *http.Request, event, secretID string) bool {
+	if r.Header.Get("X-Requested-With") == "yopass" {
+		return false
+	}
+	session, _ := y.getSession(r)
+	y.audit().Log(AuditEvent{
+		Timestamp: time.Now().UTC(), Event: event, Outcome: OutcomeDenied,
+		ClientIP: y.getRealClientIP(r), SecretID: secretID,
+		UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
+		Error: "missing X-Requested-With header",
+	})
+	writeJSONError(w, `{"message": "missing X-Requested-With header"}`, http.StatusForbidden)
+	return true
+}
+
 // createSecret creates secret
 func (y *Server) createSecret(w http.ResponseWriter, request *http.Request) {
 	session, _ := y.getSession(request)
 	clientIP := y.getRealClientIP(request)
 
+	// Cap the JSON body so an attacker can't allocate arbitrary memory by
+	// sending a huge "message" string before the post-decode length check runs.
+	// The cap is the max ciphertext length plus a small allowance for the
+	// surrounding JSON envelope (field names, quoting, escaping, options).
+	const jsonOverheadAllowance = 4096
+	bodyLimit := int64(y.MaxLength) + jsonOverheadAllowance
+	request.Body = http.MaxBytesReader(w, request.Body, bodyLimit)
+
 	decoder := json.NewDecoder(request.Body)
 	var s yopass.Secret
 	if err := decoder.Decode(&s); err != nil {
 		y.Logger.Debug("Unable to decode request", zap.Error(err))
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			y.audit().Log(AuditEvent{
+				Timestamp: time.Now().UTC(), Event: "secret.created", Outcome: OutcomeFailure,
+				ClientIP: clientIP, UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
+				Error: "request body too large",
+			})
+			http.Error(w, `{"message": "Request body too large"}`, http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, `{"message": "Unable to parse json"}`, http.StatusBadRequest)
 		return
 	}
@@ -150,6 +193,9 @@ func (y *Server) getSecret(w http.ResponseWriter, request *http.Request) {
 	w.Header().Set("Cache-Control", "private, no-cache")
 
 	secretKey := mux.Vars(request)["key"]
+	if y.requireCSRFHeader(w, request, "secret.accessed", secretKey) {
+		return
+	}
 	session, sessionErr := y.getSession(request)
 	clientIP := y.getRealClientIP(request)
 
@@ -189,29 +235,25 @@ func (y *Server) getSecret(w http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if secret.OneTime {
-		deleted, err := y.DB.Delete(secretKey)
-		if err != nil {
-			y.Logger.Error("Failed to delete one-time secret", zap.Error(err))
-			y.audit().Log(AuditEvent{
-				Timestamp: time.Now().UTC(), Event: "secret.accessed", Outcome: OutcomeFailure,
-				ClientIP: clientIP, SecretID: secretKey, OneTime: boolPtr(true),
-				UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
-				Error: "failed to claim one-time secret",
-			})
-			http.Error(w, `{"message": "Failed to process secret"}`, http.StatusInternalServerError)
-			return
-		}
-		if !deleted {
-			y.audit().Log(AuditEvent{
-				Timestamp: time.Now().UTC(), Event: "secret.accessed", Outcome: OutcomeDenied,
-				ClientIP: clientIP, SecretID: secretKey, OneTime: boolPtr(true),
-				UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
-				Error: "claimed by concurrent request",
-			})
-			http.Error(w, `{"message": "Secret not found"}`, http.StatusNotFound)
-			return
-		}
+	// Status() above only returned metadata (one_time, require_auth). Fetch
+	// the actual ciphertext now that auth has passed. For one-time secrets
+	// the Database implementation deletes the item as part of Get, providing
+	// the same single-claim guarantee the previous explicit Delete call did.
+	wasOneTime, wasRequireAuth := secret.OneTime, secret.RequireAuth
+	secret, err = y.DB.Get(secretKey)
+	if err != nil {
+		// Most common cause: the item was claimed by a concurrent request
+		// between the Status check and this Get. Treat as not-found.
+		y.Logger.Debug("Secret unavailable after auth check", zap.Error(err))
+		y.audit().Log(AuditEvent{
+			Timestamp: time.Now().UTC(), Event: "secret.accessed", Outcome: OutcomeFailure,
+			ClientIP: clientIP, SecretID: secretKey,
+			OneTime: boolPtr(wasOneTime), RequireAuth: boolPtr(wasRequireAuth),
+			UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
+			Error: "not found",
+		})
+		http.Error(w, `{"message": "Secret not found"}`, http.StatusNotFound)
+		return
 	}
 
 	data, err := secret.ToJSON()
@@ -272,6 +314,9 @@ func (y *Server) getSecretStatus(w http.ResponseWriter, request *http.Request) {
 // deleteSecret from database
 func (y *Server) deleteSecret(w http.ResponseWriter, request *http.Request) {
 	secretKey := mux.Vars(request)["key"]
+	if y.requireCSRFHeader(w, request, "secret.deleted", secretKey) {
+		return
+	}
 	session, sessionErr := y.getSession(request)
 	clientIP := y.getRealClientIP(request)
 
@@ -341,10 +386,17 @@ func (y *Server) deleteSecret(w http.ResponseWriter, request *http.Request) {
 	w.WriteHeader(204)
 }
 
-// optionsSecret handle the Options http method by returning the correct CORS headers
+// optionsSecret handles CORS preflight for the create endpoint.
 func (y *Server) optionsSecret(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "content-type")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Requested-With")
+}
+
+// secretOptions handles CORS preflight for the consume/delete endpoints,
+// allowing the X-Requested-With CSRF header.
+func (y *Server) secretOptions(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Access-Control-Allow-Methods", "GET, DELETE, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Requested-With")
 }
 
 func (y *Server) configHandler(w http.ResponseWriter, r *http.Request) {
@@ -525,6 +577,7 @@ func (y *Server) HTTPHandler() http.Handler {
 	}
 	mx.HandleFunc("/secret/"+keyParameter, y.getSecret).Methods(http.MethodGet)
 	mx.HandleFunc("/secret/"+keyParameter, y.deleteSecret).Methods(http.MethodDelete)
+	mx.HandleFunc("/secret/"+keyParameter, y.secretOptions).Methods(http.MethodOptions)
 
 	mx.HandleFunc("/config", y.configHandler).Methods(http.MethodGet)
 	mx.HandleFunc("/config", y.optionsSecret).Methods(http.MethodOptions)
@@ -534,6 +587,7 @@ func (y *Server) HTTPHandler() http.Handler {
 		mx.HandleFunc("/auth/login", y.oidcLoginHandler).Methods(http.MethodGet)
 		mx.HandleFunc("/auth/callback", y.oidcCallbackHandler).Methods(http.MethodGet)
 		mx.HandleFunc("/auth/logout", y.oidcLogoutHandler).Methods(http.MethodPost)
+		mx.HandleFunc("/auth/logout", y.oidcLogoutOptionsHandler).Methods(http.MethodOptions)
 		mx.HandleFunc("/auth/me", y.oidcMeHandler).Methods(http.MethodGet)
 	}
 
@@ -560,7 +614,7 @@ func (y *Server) HTTPHandler() http.Handler {
 	mx.HandleFunc("/logo", y.logoHandler).Methods(http.MethodGet)
 
 	mx.PathPrefix("/").Handler(http.FileServer(http.Dir(y.AssetPath)))
-	return handlers.CustomLoggingHandler(nil, SecurityHeadersHandler(mx), y.httpLogFormatter())
+	return handlers.CustomLoggingHandler(nil, y.securityHeadersHandler(mx), y.httpLogFormatter())
 }
 
 const keyParameter = "{key:(?:[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}|[a-zA-Z0-9]{22})}"
@@ -625,15 +679,24 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// SecurityHeadersHandler returns a middleware which sets common security
+// securityHeadersHandler returns a middleware which sets common security
 // HTTP headers on the response to mitigate common web vulnerabilities.
-func SecurityHeadersHandler(next http.Handler) http.Handler {
+//
+// HSTS is only emitted when the request is genuinely over HTTPS. When trusted
+// proxies are configured, X-Forwarded-Proto is honoured only from those
+// peers, matching the same gating used for cookie Secure attributes
+// (see isSecure). With no trusted proxies configured the header is still
+// honoured to preserve existing behaviour for operators who terminate TLS
+// at a reverse proxy without setting --trusted-proxies.
+func (y *Server) securityHeadersHandler(next http.Handler) http.Handler {
 	csp := []string{
 		"default-src 'self'",
+		"base-uri 'self'",
 		"font-src 'self' data:",
 		"form-action 'self'",
 		"frame-ancestors 'none'",
 		"img-src 'self' data:",
+		"object-src 'none'",
 		"script-src 'self'",
 		"style-src 'self' 'unsafe-inline'",
 	}
@@ -644,7 +707,7 @@ func SecurityHeadersHandler(next http.Handler) http.Handler {
 		w.Header().Set("x-content-type-options", "nosniff")
 		w.Header().Set("x-frame-options", "DENY")
 		w.Header().Set("x-xss-protection", "1; mode=block")
-		if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+		if y.isSecure(r) {
 			w.Header().Set("strict-transport-security", "max-age=31536000")
 		}
 		next.ServeHTTP(w, r)

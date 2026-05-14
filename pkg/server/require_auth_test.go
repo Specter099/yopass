@@ -192,6 +192,7 @@ func TestGetSecret_RequireAuth(t *testing.T) {
 			}
 
 			req := httptest.NewRequest(http.MethodGet, "/secret/"+key, nil)
+			req.Header.Set("X-Requested-With", "yopass")
 			req = mux.SetURLVars(req, map[string]string{"key": key})
 			if tc.withSession {
 				for _, c := range sessionCookiesFor(t, srv) {
@@ -229,6 +230,7 @@ func TestGetSecret_RequireAuth_OneTime(t *testing.T) {
 
 		// Unauthenticated request – must return 401 and NOT consume the secret.
 		req := httptest.NewRequest(http.MethodGet, "/secret/"+key, nil)
+		req.Header.Set("X-Requested-With", "yopass")
 		req = mux.SetURLVars(req, map[string]string{"key": key})
 		w := httptest.NewRecorder()
 		srv.getSecret(w, req)
@@ -239,6 +241,7 @@ func TestGetSecret_RequireAuth_OneTime(t *testing.T) {
 
 		// Secret must still exist – authenticated read should succeed.
 		req2 := httptest.NewRequest(http.MethodGet, "/secret/"+key, nil)
+		req2.Header.Set("X-Requested-With", "yopass")
 		req2 = mux.SetURLVars(req2, map[string]string{"key": key})
 		for _, c := range sessionCookiesFor(t, srv) {
 			req2.AddCookie(c)
@@ -267,6 +270,7 @@ func TestGetSecret_RequireAuth_OneTime(t *testing.T) {
 		cookies := sessionCookiesFor(t, srv)
 
 		req := httptest.NewRequest(http.MethodGet, "/secret/"+key, nil)
+		req.Header.Set("X-Requested-With", "yopass")
 		req = mux.SetURLVars(req, map[string]string{"key": key})
 		for _, c := range cookies {
 			req.AddCookie(c)
@@ -280,6 +284,7 @@ func TestGetSecret_RequireAuth_OneTime(t *testing.T) {
 
 		// Second read must return 404 – secret was consumed.
 		req2 := httptest.NewRequest(http.MethodGet, "/secret/"+key, nil)
+		req2.Header.Set("X-Requested-With", "yopass")
 		req2 = mux.SetURLVars(req2, map[string]string{"key": key})
 		for _, c := range cookies {
 			req2.AddCookie(c)
@@ -486,6 +491,7 @@ func TestStreamDownload_RequireAuth(t *testing.T) {
 			downloadReq := httptest.NewRequest(http.MethodGet, "/file/"+key, nil)
 			downloadReq = mux.SetURLVars(downloadReq, map[string]string{"key": key})
 			downloadReq.Header.Set("Accept", "application/octet-stream")
+			downloadReq.Header.Set("X-Requested-With", "yopass")
 			if tc.withSession {
 				for _, c := range sessionCookiesFor(t, srv) {
 					downloadReq.AddCookie(c)
@@ -588,6 +594,7 @@ func TestDeleteStreamSecret_RequireAuth_NoSession_401(t *testing.T) {
 	key := uploadRequireAuthFile(t, srv)
 
 	req := httptest.NewRequest(http.MethodDelete, "/file/"+key, nil)
+	req.Header.Set("X-Requested-With", "yopass")
 	req = mux.SetURLVars(req, map[string]string{"key": key})
 	w := httptest.NewRecorder()
 	srv.deleteStreamSecret(w, req)
@@ -607,6 +614,7 @@ func TestDeleteStreamSecret_RequireAuth_DisallowedDomain_403(t *testing.T) {
 	key := uploadRequireAuthFile(t, srv)
 
 	req := httptest.NewRequest(http.MethodDelete, "/file/"+key, nil)
+	req.Header.Set("X-Requested-With", "yopass")
 	req = mux.SetURLVars(req, map[string]string{"key": key})
 	for _, c := range sessionCookiesFor(t, srv) {
 		req.AddCookie(c)
@@ -626,6 +634,7 @@ func TestDeleteStreamSecret_RequireAuth_ValidSession_204(t *testing.T) {
 	key := uploadRequireAuthFile(t, srv)
 
 	req := httptest.NewRequest(http.MethodDelete, "/file/"+key, nil)
+	req.Header.Set("X-Requested-With", "yopass")
 	req = mux.SetURLVars(req, map[string]string{"key": key})
 	for _, c := range sessionCookiesFor(t, srv) {
 		req.AddCookie(c)
@@ -666,6 +675,7 @@ func TestDeleteStreamSecret_FileStoreError_500(t *testing.T) {
 	srv.FileStore = &failingFileStore{FileStore: NewDatabaseFileStore(db)}
 
 	req := httptest.NewRequest(http.MethodDelete, "/file/"+key, nil)
+	req.Header.Set("X-Requested-With", "yopass")
 	req = mux.SetURLVars(req, map[string]string{"key": key})
 	w := httptest.NewRecorder()
 	srv.deleteStreamSecret(w, req)

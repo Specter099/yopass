@@ -199,6 +199,9 @@ func (y *Server) streamDownload(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "private, no-cache")
 
 	key := mux.Vars(r)["key"]
+	if y.requireCSRFHeader(w, r, "file.downloaded", key) {
+		return
+	}
 	session, sessionErr := y.getSession(r)
 	clientIP := y.getRealClientIP(r)
 
@@ -331,6 +334,9 @@ func (y *Server) streamDownload(w http.ResponseWriter, r *http.Request) {
 // deleteStreamSecret deletes both the metadata and the file.
 func (y *Server) deleteStreamSecret(w http.ResponseWriter, r *http.Request) {
 	key := mux.Vars(r)["key"]
+	if y.requireCSRFHeader(w, r, "file.deleted", key) {
+		return
+	}
 	session, sessionErr := y.getSession(r)
 	clientIP := y.getRealClientIP(r)
 
@@ -466,6 +472,6 @@ func isOpenPGPBinary(b byte) bool {
 // streamOptions handles CORS preflight for streaming endpoints.
 func (y *Server) streamOptions(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, DELETE, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Yopass-Expiration, X-Yopass-OneTime, X-Yopass-RequireAuth")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Requested-With, X-Yopass-Expiration, X-Yopass-OneTime, X-Yopass-RequireAuth")
 	w.Header().Set("Access-Control-Expose-Headers", "Content-Length")
 }

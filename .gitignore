@@ -28,3 +28,6 @@ website/cypress/screenshots
 
 .idea
 yopass-server
+
+# Local working notes (todo lists, lessons learned).
+tasks/

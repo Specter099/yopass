@@ -455,15 +455,16 @@ func TestOIDCLogoutHandler(t *testing.T) {
 	wSet := httptest.NewRecorder()
 	_ = s.setSession(wSet, rSet, &sessionData{Sub: "u1"})
 
-	r := httptest.NewRequest(http.MethodGet, "/auth/logout", nil)
+	r := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	r.Header.Set("X-Requested-With", "yopass")
 	for _, c := range wSet.Result().Cookies() {
 		r.AddCookie(c)
 	}
 	w := httptest.NewRecorder()
 	s.oidcLogoutHandler(w, r)
 
-	if w.Code != http.StatusFound {
-		t.Fatalf("got %d, want 302", w.Code)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("got %d, want 204", w.Code)
 	}
 	// Session cookie should be cleared.
 	for _, c := range w.Result().Cookies() {
@@ -473,19 +474,25 @@ func TestOIDCLogoutHandler(t *testing.T) {
 	}
 }
 
-func TestOIDCLogoutHandler_FrontendURL(t *testing.T) {
+// TestOIDCLogoutHandler_MissingCSRFHeader verifies that requests lacking the
+// X-Requested-With header are rejected — defeating CSRF logout via cross-site
+// form POST in cross-origin (SameSite=None) deployments.
+func TestOIDCLogoutHandler_MissingCSRFHeader(t *testing.T) {
 	viper.Reset()
-	viper.Set("frontend-url", "https://app.example.com")
-	t.Cleanup(viper.Reset)
-
 	s := newOIDCTestServer(t)
-	r := httptest.NewRequest(http.MethodGet, "/auth/logout", nil)
+
+	r := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
 	w := httptest.NewRecorder()
 	s.oidcLogoutHandler(w, r)
 
-	loc := w.Header().Get("Location")
-	if !strings.HasPrefix(loc, "https://app.example.com") {
-		t.Fatalf("redirect location %q does not start with frontend-url", loc)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("got %d, want 403 for missing CSRF header", w.Code)
+	}
+	// No session cookie should be cleared on a rejected request.
+	for _, c := range w.Result().Cookies() {
+		if c.Name == sessionCookieName {
+			t.Fatal("session cookie unexpectedly cleared on rejected logout")
+		}
 	}
 }
 

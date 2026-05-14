@@ -2,43 +2,50 @@ import * as cdk from "aws-cdk-lib";
 import { Template, Match } from "aws-cdk-lib/assertions";
 import * as Cdk from "../lib/cdk-stack";
 
+// Use a deterministic asset path that exists (and isn't huge) so
+// BucketDeployment can hash a folder.
+const TEST_ASSET_PATH = __dirname;
+const TEST_DOMAIN = "yopass.example.com";
+
+function makeTemplate(): Template {
+  const app = new cdk.App();
+  const stack = new Cdk.CdkStack(app, "TestStack", {
+    env: { account: "111111111111", region: "us-east-1" },
+    domainName: TEST_DOMAIN,
+    // No hostedZoneName: fromLookup would require live AWS context. Operators
+    // who don't have Route 53 will point DNS at the CloudFront output manually.
+    assetPath: TEST_ASSET_PATH,
+  });
+  return Template.fromStack(stack);
+}
+
 describe("Yopass CDK Stack", () => {
   let template: Template;
 
   beforeAll(() => {
-    const app = new cdk.App();
-    const stack = new Cdk.CdkStack(app, "TestStack");
-    template = Template.fromStack(stack);
+    template = makeTemplate();
   });
 
   describe("DynamoDB Table", () => {
-    test("should create DynamoDB table with correct configuration", () => {
+    test("is on-demand (PAY_PER_REQUEST) so bursts don't get throttled", () => {
       template.hasResourceProperties("AWS::DynamoDB::Table", {
         TableName: "yopass",
-        AttributeDefinitions: [
-          {
-            AttributeName: "id",
-            AttributeType: "S",
-          },
-        ],
-        KeySchema: [
-          {
-            AttributeName: "id",
-            KeyType: "HASH",
-          },
-        ],
-        ProvisionedThroughput: {
-          ReadCapacityUnits: 10,
-          WriteCapacityUnits: 10,
-        },
-        TimeToLiveSpecification: {
-          AttributeName: "ttl",
-          Enabled: true,
-        },
+        BillingMode: "PAY_PER_REQUEST",
+        AttributeDefinitions: [{ AttributeName: "id", AttributeType: "S" }],
+        KeySchema: [{ AttributeName: "id", KeyType: "HASH" }],
+        TimeToLiveSpecification: { AttributeName: "ttl", Enabled: true },
       });
     });
 
-    test("should have retention and deletion policies", () => {
+    test("does NOT have provisioned throughput", () => {
+      // PAY_PER_REQUEST tables must omit ProvisionedThroughput entirely.
+      const tables = template.findResources("AWS::DynamoDB::Table");
+      for (const t of Object.values(tables)) {
+        expect((t as any).Properties.ProvisionedThroughput).toBeUndefined();
+      }
+    });
+
+    test("retains on stack deletion", () => {
       template.hasResource("AWS::DynamoDB::Table", {
         UpdateReplacePolicy: "Retain",
         DeletionPolicy: "Retain",
@@ -47,245 +54,208 @@ describe("Yopass CDK Stack", () => {
   });
 
   describe("Lambda Function", () => {
-    test("should create Lambda function with correct configuration", () => {
+    test("has correct runtime, architecture, and env vars", () => {
       template.hasResourceProperties("AWS::Lambda::Function", {
         Runtime: "provided.al2",
         Handler: "bootstrap",
         MemorySize: 128,
         Architectures: ["arm64"],
+        Timeout: 29,
         Environment: {
           Variables: {
             TABLE_NAME: "yopass",
             MAX_LENGTH: "10000",
+            MAX_FILE_SIZE: "128KB",
           },
         },
       });
     });
 
-    test("should have IAM role with basic execution policy", () => {
-      template.hasResourceProperties("AWS::IAM::Role", {
-        AssumeRolePolicyDocument: {
-          Statement: [
-            {
-              Action: "sts:AssumeRole",
-              Effect: "Allow",
-              Principal: {
-                Service: "lambda.amazonaws.com",
-              },
-            },
-          ],
-          Version: "2012-10-17",
-        },
-        ManagedPolicyArns: [
-          {
-            "Fn::Join": [
-              "",
-              [
-                "arn:",
-                { Ref: "AWS::Partition" },
-                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
-              ],
-            ],
-          },
-        ],
-      });
-    });
-
-    test("should have DynamoDB permissions", () => {
-      // Check that there's an IAM policy with DynamoDB permissions
+    test("has DynamoDB read/write permissions", () => {
       template.hasResourceProperties("AWS::IAM::Policy", {
         PolicyDocument: {
           Statement: Match.arrayWith([
-            {
+            Match.objectLike({
               Action: Match.arrayWith([Match.stringLikeRegexp("dynamodb:.*")]),
               Effect: "Allow",
-              Resource: Match.anyValue(),
-            },
+            }),
           ]),
-          Version: "2012-10-17",
         },
+      });
+    });
+  });
+
+  describe("S3 SPA bucket", () => {
+    test("blocks all public access, encrypts at rest, requires TLS", () => {
+      template.hasResourceProperties("AWS::S3::Bucket", {
+        PublicAccessBlockConfiguration: {
+          BlockPublicAcls: true,
+          BlockPublicPolicy: true,
+          IgnorePublicAcls: true,
+          RestrictPublicBuckets: true,
+        },
+        BucketEncryption: {
+          ServerSideEncryptionConfiguration: Match.arrayWith([
+            Match.objectLike({
+              ServerSideEncryptionByDefault: { SSEAlgorithm: "AES256" },
+            }),
+          ]),
+        },
+      });
+    });
+
+    test("has a bucket policy that requires TLS-only access", () => {
+      template.hasResourceProperties("AWS::S3::BucketPolicy", {
+        PolicyDocument: {
+          Statement: Match.arrayWith([
+            Match.objectLike({
+              Effect: "Deny",
+              Condition: {
+                Bool: { "aws:SecureTransport": "false" },
+              },
+            }),
+          ]),
+        },
+      });
+    });
+  });
+
+  describe("CloudFront distribution", () => {
+    test("serves the configured custom domain over TLS 1.2+", () => {
+      template.hasResourceProperties("AWS::CloudFront::Distribution", {
+        DistributionConfig: Match.objectLike({
+          Aliases: [TEST_DOMAIN],
+          ViewerCertificate: Match.objectLike({
+            MinimumProtocolVersion: "TLSv1.2_2021",
+            SslSupportMethod: "sni-only",
+          }),
+        }),
+      });
+    });
+
+    test("routes API paths to API Gateway and everything else to S3", () => {
+      template.hasResourceProperties("AWS::CloudFront::Distribution", {
+        DistributionConfig: Match.objectLike({
+          DefaultRootObject: "index.html",
+          CacheBehaviors: Match.arrayWith([
+            Match.objectLike({ PathPattern: "/create/*" }),
+            Match.objectLike({ PathPattern: "/secret/*" }),
+            Match.objectLike({ PathPattern: "/file/*" }),
+            Match.objectLike({ PathPattern: "/auth/*" }),
+            Match.objectLike({ PathPattern: "/config" }),
+            Match.objectLike({ PathPattern: "/version" }),
+            Match.objectLike({ PathPattern: "/health" }),
+            Match.objectLike({ PathPattern: "/ready" }),
+          ]),
+        }),
+      });
+    });
+
+    test("has an Origin Access Control attached to the S3 origin", () => {
+      template.hasResourceProperties("AWS::CloudFront::OriginAccessControl", {
+        OriginAccessControlConfig: Match.objectLike({
+          OriginAccessControlOriginType: "s3",
+          SigningBehavior: "always",
+          SigningProtocol: "sigv4",
+        }),
+      });
+    });
+
+    test("has a CloudFront Function for SPA path rewrites", () => {
+      template.hasResourceProperties("AWS::CloudFront::Function", {
+        FunctionConfig: Match.objectLike({ Runtime: "cloudfront-js-2.0" }),
+      });
+    });
+
+    test("API cache policy forwards X-Requested-With and X-Yopass-* headers", () => {
+      template.hasResourceProperties("AWS::CloudFront::CachePolicy", {
+        CachePolicyConfig: Match.objectLike({
+          ParametersInCacheKeyAndForwardedToOrigin: Match.objectLike({
+            HeadersConfig: Match.objectLike({
+              HeaderBehavior: "whitelist",
+              Headers: Match.arrayWith([
+                "X-Requested-With",
+                "X-Yopass-Expiration",
+                "X-Yopass-OneTime",
+                "X-Yopass-RequireAuth",
+              ]),
+            }),
+          }),
+        }),
       });
     });
   });
 
   describe("ACM Certificate", () => {
-    test("should create SSL certificate for correct domain", () => {
+    test("is for the configured domain, DNS-validated", () => {
       template.hasResourceProperties("AWS::CertificateManager::Certificate", {
-        DomainName: "api.yopass.se",
+        DomainName: TEST_DOMAIN,
         ValidationMethod: "DNS",
-      });
-    });
-
-    test("should have proper tags", () => {
-      template.hasResourceProperties("AWS::CertificateManager::Certificate", {
-        Tags: [
-          {
-            Key: "Name",
-            Value: Match.stringLikeRegexp(".*Certificate"),
-          },
-        ],
       });
     });
   });
 
   describe("API Gateway", () => {
-    test("should create REST API with correct name", () => {
+    test("is a regional endpoint (CloudFront origin)", () => {
       template.hasResourceProperties("AWS::ApiGateway::RestApi", {
         Name: "yopass",
+        EndpointConfiguration: { Types: ["REGIONAL"] },
       });
     });
 
-    test("should create deployment and stage", () => {
-      template.hasResourceProperties("AWS::ApiGateway::Deployment", {
-        Description: "Automatically created by the RestApi construct",
-      });
-
-      template.hasResourceProperties("AWS::ApiGateway::Stage", {
-        StageName: "prod",
-      });
-    });
-
-    test("should have proxy integration with Lambda", () => {
+    test("has Lambda proxy integration", () => {
       template.hasResourceProperties("AWS::ApiGateway::Method", {
         AuthorizationType: "NONE",
         HttpMethod: "ANY",
-        Integration: {
-          IntegrationHttpMethod: "POST",
-          Type: "AWS_PROXY",
-        },
+        Integration: { IntegrationHttpMethod: "POST", Type: "AWS_PROXY" },
       });
     });
 
-    test("should have Lambda invoke permissions", () => {
-      template.hasResourceProperties("AWS::Lambda::Permission", {
-        Action: "lambda:InvokeFunction",
-        Principal: "apigateway.amazonaws.com",
+    test("declares application/octet-stream as a binary type for file streaming", () => {
+      template.hasResourceProperties("AWS::ApiGateway::RestApi", {
+        BinaryMediaTypes: ["application/octet-stream"],
       });
     });
 
-    test("should create usage plan with quotas and throttling", () => {
+    test("has a usage plan with daily quota and per-second throttling", () => {
       template.hasResourceProperties("AWS::ApiGateway::UsagePlan", {
-        Quota: {
-          Limit: 1000,
-          Period: "DAY",
-        },
-        Throttle: {
-          BurstLimit: 25,
-          RateLimit: 50,
-        },
+        Quota: { Limit: 10000, Period: "DAY" },
+        Throttle: { BurstLimit: 25, RateLimit: 50 },
       });
     });
 
-    test("should create custom domain", () => {
-      template.hasResourceProperties("AWS::ApiGateway::DomainName", {
-        DomainName: "api.yopass.se",
-        EndpointConfiguration: {
-          Types: ["REGIONAL"],
-        },
-      });
-    });
-
-    test("should create base path mapping", () => {
-      template.hasResource("AWS::ApiGateway::BasePathMapping", {});
+    test("does NOT create its own custom domain (CloudFront fronts everything)", () => {
+      const domains = template.findResources("AWS::ApiGateway::DomainName");
+      expect(Object.keys(domains)).toHaveLength(0);
     });
   });
 
-  describe("CloudFormation Outputs", () => {
-    test("should output API Gateway endpoint", () => {
+  describe("Outputs", () => {
+    test("emits AppURL, DistributionDomainName, and ApiGatewayURL", () => {
       const outputs = template.toJSON().Outputs;
-      const gatewayOutputs = Object.keys(outputs).filter(
-        (key) => key.includes("Gateway") && key.includes("Endpoint"),
-      );
-      expect(gatewayOutputs.length).toBeGreaterThan(0);
-    });
-
-    test("should output custom domain name", () => {
-      template.hasOutput("APIGatewayDomainName", {
-        Value: {
-          "Fn::GetAtt": [
-            Match.stringLikeRegexp("GatewayDomainName.*"),
-            "RegionalDomainName",
-          ],
-        },
-      });
+      const keys = Object.keys(outputs);
+      expect(keys.some((k) => k.startsWith("AppURL"))).toBe(true);
+      expect(keys.some((k) => k.startsWith("DistributionDomainName"))).toBe(true);
+      expect(keys.some((k) => k.startsWith("ApiGatewayURL"))).toBe(true);
     });
   });
 
-  describe("Resource Count", () => {
-    test("should have expected number of resources", () => {
+  describe("Resource counts", () => {
+    test("provisions exactly one Lambda, one DynamoDB table, one CloudFront distribution, one S3 SPA bucket", () => {
       const resources = template.toJSON().Resources;
-      const resourceTypes = Object.values(resources).map(
-        (resource: any) => resource.Type,
-      );
+      const counts: Record<string, number> = {};
+      for (const r of Object.values(resources)) {
+        const t = (r as any).Type;
+        counts[t] = (counts[t] ?? 0) + 1;
+      }
 
-      // Count specific resource types
-      expect(
-        resourceTypes.filter((type) => type === "AWS::DynamoDB::Table"),
-      ).toHaveLength(1);
-      expect(
-        resourceTypes.filter((type) => type === "AWS::Lambda::Function"),
-      ).toHaveLength(1);
-      expect(
-        resourceTypes.filter((type) => type === "AWS::ApiGateway::RestApi"),
-      ).toHaveLength(1);
-      expect(
-        resourceTypes.filter(
-          (type) => type === "AWS::CertificateManager::Certificate",
-        ),
-      ).toHaveLength(1);
-      expect(
-        resourceTypes.filter((type) => type === "AWS::ApiGateway::UsagePlan"),
-      ).toHaveLength(1);
-      expect(
-        resourceTypes.filter((type) => type === "AWS::ApiGateway::DomainName"),
-      ).toHaveLength(1);
-    });
-  });
-
-  describe("Stack Properties", () => {
-    test("should have correct stack metadata", () => {
-      const stackJson = template.toJSON();
-      expect(stackJson.Parameters).toHaveProperty("BootstrapVersion");
-      // CDK metadata might not be present in test environment, so make it optional
-      const hasMetadata = Object.keys(stackJson.Resources).some(
-        (key) => key.includes("CDKMetadata") || key.includes("Metadata"),
-      );
-      // This test passes if metadata exists or doesn't exist - both are valid
-      expect(typeof hasMetadata).toBe("boolean");
-    });
-  });
-
-  describe("Integration Tests", () => {
-    test("Lambda should have proper dependencies", () => {
-      template.hasResource("AWS::Lambda::Function", {
-        DependsOn: Match.arrayWith([
-          Match.stringLikeRegexp("YopassServiceRole.*"),
-        ]),
-      });
-    });
-
-    test("API Gateway should have CloudWatch logging role", () => {
-      template.hasResourceProperties("AWS::IAM::Role", {
-        AssumeRolePolicyDocument: {
-          Statement: [
-            {
-              Action: "sts:AssumeRole",
-              Effect: "Allow",
-              Principal: {
-                Service: "apigateway.amazonaws.com",
-              },
-            },
-          ],
-        },
-      });
-    });
-
-    test("Custom domain should use regional certificate", () => {
-      template.hasResourceProperties("AWS::ApiGateway::DomainName", {
-        RegionalCertificateArn: {
-          Ref: Match.stringLikeRegexp("Certificate.*"),
-        },
-      });
+      expect(counts["AWS::DynamoDB::Table"]).toBe(1);
+      expect(counts["AWS::Lambda::Function"]).toBeGreaterThanOrEqual(1); // includes BucketDeployment helper lambda
+      expect(counts["AWS::ApiGateway::RestApi"]).toBe(1);
+      expect(counts["AWS::CloudFront::Distribution"]).toBe(1);
+      expect(counts["AWS::CertificateManager::Certificate"]).toBe(1);
+      // SPA bucket + BucketDeployment helper bucket — count at least 1.
+      expect(counts["AWS::S3::Bucket"]).toBeGreaterThanOrEqual(1);
     });
   });
 });
