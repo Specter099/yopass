@@ -26,7 +26,7 @@ func TestRedactSecretID(t *testing.T) {
 }
 
 func TestNewAuditLogger_Stdout(t *testing.T) {
-	l, err := NewAuditLogger("", false)
+	l, err := NewAuditLogger("", false, nil)
 	require.NoError(t, err)
 	require.NotNil(t, l)
 
@@ -46,7 +46,7 @@ func TestNewAuditLogger_File(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "audit.log")
 
-	l, err := NewAuditLogger(path, false)
+	l, err := NewAuditLogger(path, false, nil)
 	require.NoError(t, err)
 
 	l.Log(AuditEvent{
@@ -87,13 +87,15 @@ func TestNewAuditLogger_File(t *testing.T) {
 }
 
 // TestNewAuditLogger_RedactEmail verifies that when redactEmail=true the
-// user_email field is hashed (12-char SHA-256 prefix) instead of written in
-// cleartext, while remaining stable so log analysis can correlate by user.
+// user_email field is written as a keyed HMAC digest (12-char prefix) instead
+// of cleartext, remaining stable so log analysis can correlate by user, while
+// being keyed so the low-entropy address is not dictionary-recoverable.
 func TestNewAuditLogger_RedactEmail(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "audit.log")
 
-	l, err := NewAuditLogger(path, true)
+	key := []byte("test-audit-redaction-key-0123456")
+	l, err := NewAuditLogger(path, true, key)
 	require.NoError(t, err)
 
 	l.Log(AuditEvent{
@@ -115,15 +117,17 @@ func TestNewAuditLogger_RedactEmail(t *testing.T) {
 	assert.Len(t, got, 12)
 	assert.NotEqual(t, "user@example.com", got)
 	assert.NotContains(t, got, "@")
-	// Stable hash so analysis tools can correlate events for the same user.
-	assert.Equal(t, redactSecretID("user@example.com"), got)
+	// Keyed HMAC, not a bare hash: stable for correlation but tied to the key.
+	assert.Equal(t, redactEmail("user@example.com", key), got)
+	// A different key produces a different digest for the same address.
+	assert.NotEqual(t, redactEmail("user@example.com", []byte("a-different-key-aaaaaaaaaaaaaaaaa")), got)
 }
 
 func TestNewAuditLogger_OptionalFieldsSuppressed(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "audit.log")
 
-	l, err := NewAuditLogger(path, false)
+	l, err := NewAuditLogger(path, false, nil)
 	require.NoError(t, err)
 
 	l.Log(AuditEvent{
@@ -148,7 +152,7 @@ func TestNewAuditLogger_OptionalFieldsSuppressed(t *testing.T) {
 
 func TestNewAuditLogger_InvalidPath(t *testing.T) {
 	// A file inside a non-existent directory cannot be created by zap.
-	_, err := NewAuditLogger(filepath.Join(t.TempDir(), "does", "not", "exist", "audit.log"), false)
+	_, err := NewAuditLogger(filepath.Join(t.TempDir(), "does", "not", "exist", "audit.log"), false, nil)
 	assert.Error(t, err)
 }
 
@@ -171,7 +175,7 @@ func TestServerAuditFallback(t *testing.T) {
 
 	// When set, returns the configured logger.
 	dir := t.TempDir()
-	real, err := NewAuditLogger(filepath.Join(dir, "a.log"), false)
+	real, err := NewAuditLogger(filepath.Join(dir, "a.log"), false, nil)
 	require.NoError(t, err)
 	s.Audit = real
 	assert.Same(t, real, s.audit())

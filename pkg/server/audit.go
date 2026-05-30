@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"time"
@@ -53,11 +54,14 @@ func NewNoopAuditLogger() AuditLogger { return noopAuditLogger{} }
 // NewAuditLogger builds a zap-backed NDJSON audit logger.
 // An empty path writes to stdout; otherwise output goes to the given file path.
 //
-// When redactEmail is true, user_email values are written as a 12-char
-// SHA-256 prefix (mirroring secret_id) so logs remain correlatable across
-// events for the same user but the cleartext address is not retained.
-// This is for deployments whose retention policy treats email as PII.
-func NewAuditLogger(path string, redactEmail bool) (AuditLogger, error) {
+// When redactEmail is true, user_email values are written as a keyed
+// HMAC-SHA256 digest (12-char prefix) using redactKey, so logs remain
+// correlatable across events for the same user but the cleartext address is
+// not retained. Unlike a bare hash, the HMAC key prevents recovery of the
+// low-entropy address by dictionary attack. This is for deployments whose
+// retention policy treats email as PII. The caller is responsible for
+// supplying a stable redactKey (see cmd/yopass-server) when redactEmail is set.
+func NewAuditLogger(path string, redactEmail bool, redactKey []byte) (AuditLogger, error) {
 	cfg := zap.NewProductionConfig()
 	cfg.Encoding = "json"
 	cfg.EncoderConfig = zapcore.EncoderConfig{
@@ -78,12 +82,13 @@ func NewAuditLogger(path string, redactEmail bool) (AuditLogger, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &zapAuditLogger{logger: l, redactEmail: redactEmail}, nil
+	return &zapAuditLogger{logger: l, redactEmail: redactEmail, redactKey: redactKey}, nil
 }
 
 type zapAuditLogger struct {
 	logger      *zap.Logger
 	redactEmail bool
+	redactKey   []byte
 }
 
 func (a *zapAuditLogger) Sync() error { return a.logger.Sync() }
@@ -101,7 +106,7 @@ func (a *zapAuditLogger) Log(e AuditEvent) {
 	if e.UserEmail != "" {
 		email := e.UserEmail
 		if a.redactEmail {
-			email = redactSecretID(email)
+			email = redactEmail(email, a.redactKey)
 		}
 		fields = append(fields, zap.String("user_email", email))
 	}
@@ -134,13 +139,27 @@ func (y *Server) audit() AuditLogger {
 
 // redactSecretID hashes the raw secret key to a short fingerprint so audit
 // logs can correlate events without exposing a token that could be used to
-// retrieve the secret.
+// retrieve the secret. Secret keys are high-entropy random values, so a bare
+// truncated hash is not feasibly reversible.
 func redactSecretID(secretID string) string {
 	if secretID == "" {
 		return ""
 	}
 	sum := sha256.Sum256([]byte(secretID))
 	return hex.EncodeToString(sum[:])[:12]
+}
+
+// redactEmail returns a keyed HMAC-SHA256 digest (12-char prefix) of email.
+// Email addresses are low-entropy, so a bare hash (like redactSecretID) could
+// be reversed with a dictionary of candidate addresses; the HMAC key defeats
+// that while keeping the digest stable for correlation across events.
+func redactEmail(email string, key []byte) string {
+	if email == "" {
+		return ""
+	}
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(email))
+	return hex.EncodeToString(mac.Sum(nil))[:12]
 }
 
 // boolPtr returns a pointer to b for use in optional *bool AuditEvent fields.

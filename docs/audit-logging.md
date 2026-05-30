@@ -31,7 +31,8 @@ yopass-server \
 |------|---------|---------|-------------|
 | `--audit-log` | `AUDIT_LOG` | `false` | Enable audit logging (requires valid license) |
 | `--audit-log-file` | `AUDIT_LOG_FILE` | — | Write audit log to this file path. When unset, records go to stdout. |
-| `--audit-redact-email` | `AUDIT_REDACT_EMAIL` | `false` | Hash `user_email` to a 12-char SHA-256 prefix instead of writing it in cleartext. The hash is stable so analysis tools can still group events by user, but the address itself is never written to disk. |
+| `--audit-redact-email` | `AUDIT_REDACT_EMAIL` | `false` | Pseudonymize `user_email` to a 12-char **keyed HMAC** digest instead of writing it in cleartext. The digest is stable so analysis tools can still group events by user, and being keyed it is not reversible by dictionary attack the way a bare hash of a low-entropy address would be. This is pseudonymization for correlation, not irreversible anonymization. |
+| `--audit-redact-key` | `AUDIT_REDACT_KEY` | — | Hex key (≥64 chars / 32 bytes) for the email HMAC. When unset, the key is derived from a 128-hex `--oidc-session-key`; if neither is set, an **ephemeral per-process key** is generated and digests will not correlate across restarts or instances (a startup warning is logged). Generate with `openssl rand -hex 32`. |
 
 ---
 
@@ -48,14 +49,14 @@ Each event is a single JSON object terminated by a newline (NDJSON). Fields are 
 | `outcome` | string | yes | `success`, `failure`, or `denied` |
 | `client_ip` | string | yes | Real client IP, respecting `--trusted-proxies` |
 | `secret_id` | string | no | Key identifying the secret or file |
-| `user_email` | string | no | Authenticated user's email (OIDC sessions only). Hashed to a 12-char SHA-256 prefix when `--audit-redact-email` is set. |
+| `user_email` | string | no | Authenticated user's email (OIDC sessions only). Pseudonymized to a 12-char keyed-HMAC digest when `--audit-redact-email` is set. |
 | `user_subject` | string | no | Authenticated user's OIDC subject claim |
 | `one_time` | bool | no | Whether the secret was configured for one-time access |
 | `expiration_seconds` | number | no | TTL in seconds at creation time |
 | `require_auth` | bool | no | Whether the secret requires OIDC authentication to access |
 | `error` | string | no | Human-readable reason for `failure` or `denied` outcomes |
 
-> **Privacy note:** Encrypted secret content is never written to the audit log — only the key (ID) and metadata are recorded. `secret_id` is always stored as a 12-char SHA-256 prefix so the log cannot be replayed against the secret store. `user_email` is written in cleartext by default; set `--audit-redact-email` to hash it the same way for deployments that treat email as PII.
+> **Privacy note:** Encrypted secret content is never written to the audit log — only the key (ID) and metadata are recorded. `secret_id` is always stored as a 12-char SHA-256 prefix; because secret keys are high-entropy random values this is not feasibly reversible and the log cannot be replayed against the secret store. `user_email` is written in cleartext by default; set `--audit-redact-email` to replace it with a 12-char keyed-HMAC digest for deployments that treat email as PII. Note that email addresses are low-entropy, so a *bare* hash would be recoverable by dictionary attack — the HMAC key (see `--audit-redact-key`) is what makes the digest resistant. This is pseudonymization for correlation, not irreversible anonymization; for the latter, omit identity entirely.
 
 ### Example records
 

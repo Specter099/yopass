@@ -93,10 +93,10 @@ func (y *Server) createSecret(w http.ResponseWriter, request *http.Request) {
 				ClientIP: clientIP, UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 				Error: "request body too large",
 			})
-			http.Error(w, `{"message": "Request body too large"}`, http.StatusRequestEntityTooLarge)
+			writeJSONError(w, `{"message": "Request body too large"}`, http.StatusRequestEntityTooLarge)
 			return
 		}
-		http.Error(w, `{"message": "Unable to parse json"}`, http.StatusBadRequest)
+		writeJSONError(w, `{"message": "Unable to parse json"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -106,7 +106,7 @@ func (y *Server) createSecret(w http.ResponseWriter, request *http.Request) {
 			ClientIP: clientIP, UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "message not PGP encrypted",
 		})
-		http.Error(w, `{"message": "Message must be PGP encrypted"}`, http.StatusBadRequest)
+		writeJSONError(w, `{"message": "Message must be PGP encrypted"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -116,7 +116,7 @@ func (y *Server) createSecret(w http.ResponseWriter, request *http.Request) {
 			ClientIP: clientIP, UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "invalid expiration",
 		})
-		http.Error(w, `{"message": "Invalid expiration specified"}`, http.StatusBadRequest)
+		writeJSONError(w, `{"message": "Invalid expiration specified"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -126,7 +126,7 @@ func (y *Server) createSecret(w http.ResponseWriter, request *http.Request) {
 			ClientIP: clientIP, UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "auth required but OIDC not configured",
 		})
-		http.Error(w, `{"message": "Authentication not configured on this server"}`, http.StatusBadRequest)
+		writeJSONError(w, `{"message": "Authentication not configured on this server"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -136,7 +136,7 @@ func (y *Server) createSecret(w http.ResponseWriter, request *http.Request) {
 			ClientIP: clientIP, UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "one-time required by server policy",
 		})
-		http.Error(w, `{"message": "Secret must be one time download"}`, http.StatusBadRequest)
+		writeJSONError(w, `{"message": "Secret must be one time download"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -146,7 +146,7 @@ func (y *Server) createSecret(w http.ResponseWriter, request *http.Request) {
 			ClientIP: clientIP, UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "message too long",
 		})
-		http.Error(w, `{"message": "The encrypted message is too long"}`, http.StatusBadRequest)
+		writeJSONError(w, `{"message": "The encrypted message is too long"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -159,7 +159,7 @@ func (y *Server) createSecret(w http.ResponseWriter, request *http.Request) {
 			ClientIP: clientIP, UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "failed to generate ID",
 		})
-		http.Error(w, `{"message": "Unable to generate ID"}`, http.StatusInternalServerError)
+		writeJSONError(w, `{"message": "Unable to generate ID"}`, http.StatusInternalServerError)
 		return
 	}
 
@@ -172,7 +172,7 @@ func (y *Server) createSecret(w http.ResponseWriter, request *http.Request) {
 			UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "database error",
 		})
-		http.Error(w, `{"message": "Failed to store secret in database"}`, http.StatusInternalServerError)
+		writeJSONError(w, `{"message": "Failed to store secret in database"}`, http.StatusInternalServerError)
 		return
 	}
 
@@ -209,7 +209,7 @@ func (y *Server) getSecret(w http.ResponseWriter, request *http.Request) {
 			UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "not found",
 		})
-		http.Error(w, `{"message": "Secret not found"}`, http.StatusNotFound)
+		writeJSONError(w, `{"message": "Secret not found"}`, http.StatusNotFound)
 		return
 	}
 
@@ -252,14 +252,14 @@ func (y *Server) getSecret(w http.ResponseWriter, request *http.Request) {
 			UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "not found",
 		})
-		http.Error(w, `{"message": "Secret not found"}`, http.StatusNotFound)
+		writeJSONError(w, `{"message": "Secret not found"}`, http.StatusNotFound)
 		return
 	}
 
 	data, err := secret.ToJSON()
 	if err != nil {
 		y.Logger.Error("Failed to encode request", zap.Error(err))
-		http.Error(w, `{"message": "Failed to encode secret"}`, http.StatusInternalServerError)
+		writeJSONError(w, `{"message": "Failed to encode secret"}`, http.StatusInternalServerError)
 		return
 	}
 
@@ -295,7 +295,7 @@ func (y *Server) getSecretStatus(w http.ResponseWriter, request *http.Request) {
 			UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "not found",
 		})
-		http.Error(w, `{"message": "Secret not found"}`, http.StatusNotFound)
+		writeJSONError(w, `{"message": "Secret not found"}`, http.StatusNotFound)
 		return
 	}
 
@@ -329,7 +329,7 @@ func (y *Server) deleteSecret(w http.ResponseWriter, request *http.Request) {
 			UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "not found",
 		})
-		http.Error(w, `{"message": "Secret not found"}`, http.StatusNotFound)
+		writeJSONError(w, `{"message": "Secret not found"}`, http.StatusNotFound)
 		return
 	}
 
@@ -363,7 +363,7 @@ func (y *Server) deleteSecret(w http.ResponseWriter, request *http.Request) {
 			UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "database error",
 		})
-		http.Error(w, `{"message": "Failed to delete secret"}`, http.StatusInternalServerError)
+		writeJSONError(w, `{"message": "Failed to delete secret"}`, http.StatusInternalServerError)
 		return
 	}
 
@@ -374,7 +374,7 @@ func (y *Server) deleteSecret(w http.ResponseWriter, request *http.Request) {
 			UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "not found",
 		})
-		http.Error(w, `{"message": "Secret not found"}`, http.StatusNotFound)
+		writeJSONError(w, `{"message": "Secret not found"}`, http.StatusNotFound)
 		return
 	}
 
@@ -689,6 +689,12 @@ func corsMiddleware(next http.Handler) http.Handler {
 // honoured to preserve existing behaviour for operators who terminate TLS
 // at a reverse proxy without setting --trusted-proxies.
 func (y *Server) securityHeadersHandler(next http.Handler) http.Handler {
+	// style-src retains 'unsafe-inline' because ThemeProvider/DaisyUI write
+	// theme variables into an inline <style> element at runtime. This is an
+	// accepted residual: the custom-theme value allowlist (isValidCSSColorValue
+	// in cmd/yopass-server) is the compensating control that prevents rule-level
+	// CSS injection through that channel. Moving to nonce/hash-based styles would
+	// let us drop 'unsafe-inline' entirely — tracked as a future hardening step.
 	csp := []string{
 		"default-src 'self'",
 		"base-uri 'self'",

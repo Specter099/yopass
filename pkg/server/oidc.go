@@ -61,6 +61,13 @@ func NewCookieCodec(key string) *securecookie.SecureCookie {
 	return securecookie.New(hashKey, encryptKey)
 }
 
+// DeriveKey exposes deriveKey to callers outside the package (e.g. the audit
+// email-redaction key in cmd/yopass-server), deriving a labelled subkey from
+// the same 128-hex master secret used for OIDC.
+func DeriveKey(masterHex, label string) []byte {
+	return deriveKey(masterHex, label)
+}
+
 // deriveKey returns a 32-byte key derived from masterHex using HKDF-SHA256 with label as info.
 // Falls back to a fresh random key if masterHex is empty or invalid.
 func deriveKey(masterHex, label string) []byte {
@@ -306,7 +313,7 @@ func (y *Server) oidcUserinfoCallback(
 			Timestamp: time.Now().UTC(), Event: "auth.callback_failed", Outcome: OutcomeFailure,
 			ClientIP: clientIP, Error: "missing subject claim",
 		})
-		http.Error(w, `{"message": "Invalid OIDC response"}`, http.StatusUnauthorized)
+		writeJSONError(w, `{"message": "Invalid OIDC response"}`, http.StatusUnauthorized)
 		return
 	}
 
@@ -333,7 +340,7 @@ func (y *Server) oidcUserinfoCallback(
 			ClientIP: clientIP, UserEmail: info.Email, UserSubject: info.Subject,
 			Error: "failed to create session",
 		})
-		http.Error(w, `{"message": "Failed to create session"}`, http.StatusInternalServerError)
+		writeJSONError(w, `{"message": "Failed to create session"}`, http.StatusInternalServerError)
 		return
 	}
 	y.audit().Log(AuditEvent{
@@ -395,18 +402,18 @@ func (y *Server) oidcMeHandler(w http.ResponseWriter, r *http.Request) {
 	s, err := y.getSession(r)
 	if err != nil {
 		y.Logger.Debug("invalid session cookie", zap.Error(err))
-		http.Error(w, `{"message": "unauthorized"}`, http.StatusUnauthorized)
+		writeJSONError(w, `{"message": "unauthorized"}`, http.StatusUnauthorized)
 		return
 	}
 	if s == nil {
-		http.Error(w, `{"message": "unauthorized"}`, http.StatusUnauthorized)
+		writeJSONError(w, `{"message": "unauthorized"}`, http.StatusUnauthorized)
 		return
 	}
 	// Re-validate the domain on every request so that removing a domain from
 	// --oidc-allowed-domains takes effect immediately without waiting for
 	// existing sessions to expire.
 	if !emailAllowed(s.Email) {
-		http.Error(w, `{"message": "email domain not permitted"}`, http.StatusForbidden)
+		writeJSONError(w, `{"message": "email domain not permitted"}`, http.StatusForbidden)
 		return
 	}
 	if err := json.NewEncoder(w).Encode(s); err != nil {
@@ -421,12 +428,12 @@ func (y *Server) requireAuthMiddleware(next http.Handler) http.Handler {
 		s, err := y.getSession(r)
 		if err != nil || s == nil {
 			w.Header().Set("Content-Type", "application/json")
-			http.Error(w, `{"message": "authentication required"}`, http.StatusUnauthorized)
+			writeJSONError(w, `{"message": "authentication required"}`, http.StatusUnauthorized)
 			return
 		}
 		if !emailAllowed(s.Email) {
 			w.Header().Set("Content-Type", "application/json")
-			http.Error(w, `{"message": "email domain not permitted"}`, http.StatusForbidden)
+			writeJSONError(w, `{"message": "email domain not permitted"}`, http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)
