@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -48,7 +50,7 @@ var licenseBrandingFlags = []string{
 }
 
 var licenseAuditFlags = []string{
-	"audit-log", "audit-log-file", "audit-redact-email",
+	"audit-log", "audit-log-file", "audit-redact-email", "audit-redact-key",
 }
 
 // flagSectionFiltered returns a temporary FlagSet containing only the flags
@@ -112,7 +114,8 @@ func init() {
 	pflag.String("frontend-url", "", "frontend base URL for post-login redirect in split deployments (e.g. http://localhost:3000)")
 	pflag.Bool("audit-log", false, "enable structured audit logging to NDJSON (requires valid license)")
 	pflag.String("audit-log-file", "", "file path for audit log output (default: stdout)")
-	pflag.Bool("audit-redact-email", false, "hash user_email in audit logs (12-char SHA-256 prefix) — preserves correlation but removes PII")
+	pflag.Bool("audit-redact-email", false, "pseudonymize user_email in audit logs (12-char keyed HMAC) — preserves per-user correlation without retaining the cleartext address; not reversible-proof anonymization")
+	pflag.String("audit-redact-key", "", "hex key (>=64 chars / 32 bytes) for --audit-redact-email; if unset, derived from --oidc-session-key, else an ephemeral per-process key is used (no cross-restart correlation)")
 	pflag.CommandLine.AddGoFlag(&flag.Flag{Name: "log-level", Usage: "Log level", Value: &logLevel})
 
 	for _, name := range licenseOIDCFlags {
@@ -263,6 +266,24 @@ func main() {
 		logger.Fatal("--require-auth is set but OIDC is not configured (check --oidc-issuer and --license-key)")
 	}
 
+	// Security posture warnings for authenticated deployments. These do not
+	// block startup but flag configurations where the consume-endpoint CSRF
+	// guard and Secure-cookie logic rest on weaker assumptions.
+	if oidcProvider != nil {
+		// M1: with no trusted proxies, X-Forwarded-Proto is honoured from any
+		// peer, so an attacker reaching the server directly can influence
+		// Secure/SameSite cookie attributes and HSTS emission.
+		if len(viper.GetStringSlice("trusted-proxies")) == 0 {
+			logger.Warn("OIDC is enabled but --trusted-proxies is not set; X-Forwarded-Proto is trusted from any client, so HTTPS detection (Secure cookies, HSTS) can be spoofed. Set --trusted-proxies to your reverse proxy's address(es).")
+		}
+		// H2: the X-Requested-With CSRF guard on consume endpoints only blocks
+		// cross-origin fetches when CORS is restricted to a specific origin.
+		// With the wildcard default the preflight succeeds for any origin.
+		if viper.GetString("frontend-url") == "" && viper.GetString("cors-allow-origin") == "*" {
+			logger.Warn("OIDC is enabled but cors-allow-origin is '*' and --frontend-url is unset; cross-origin fetches to consume endpoints are not blocked by the CSRF guard. Set --cors-allow-origin (or --frontend-url) to your frontend origin.")
+		}
+	}
+
 	var cookieCodec *securecookie.SecureCookie
 	if oidcProvider != nil {
 		sessionKey := viper.GetString("oidc-session-key")
@@ -286,7 +307,12 @@ func main() {
 		if !licenseStatus.Valid {
 			logger.Fatal("--audit-log requires a valid license key")
 		}
-		al, err := server.NewAuditLogger(viper.GetString("audit-log-file"), viper.GetBool("audit-redact-email"))
+		redactEmail := viper.GetBool("audit-redact-email")
+		var redactKey []byte
+		if redactEmail {
+			redactKey = resolveAuditRedactKey(logger)
+		}
+		al, err := server.NewAuditLogger(viper.GetString("audit-log-file"), redactEmail, redactKey)
 		if err != nil {
 			logger.Fatal("failed to initialize audit logger", zap.Error(err))
 		}
@@ -436,7 +462,43 @@ func main() {
 var cssColorValueRe = regexp.MustCompile(`^[a-zA-Z0-9.,()#%/ -]+$`)
 
 func isValidCSSColorValue(s string) bool {
-	return s != "" && cssColorValueRe.MatchString(s)
+	if s == "" || !cssColorValueRe.MatchString(s) {
+		return false
+	}
+	// Defense-in-depth: a color value never needs url() or a protocol-relative
+	// path, and the character allowlist alone would otherwise permit e.g.
+	// url(//evil/x) since ':' is not required. Reject both.
+	if strings.Contains(strings.ToLower(s), "url") || strings.Contains(s, "//") {
+		return false
+	}
+	return true
+}
+
+// resolveAuditRedactKey returns the HMAC key used to pseudonymize user_email
+// in audit logs. Preference order:
+//  1. --audit-redact-key (explicit, >=32 bytes of hex)
+//  2. a labelled subkey derived from a 128-hex --oidc-session-key
+//  3. an ephemeral random key (digests will not correlate across restarts or
+//     instances; a warning is logged so this is visible)
+func resolveAuditRedactKey(logger *zap.Logger) []byte {
+	if raw := viper.GetString("audit-redact-key"); raw != "" {
+		key, err := hex.DecodeString(raw)
+		if err != nil || len(key) < 32 {
+			logger.Fatal("--audit-redact-key must be at least 64 hex characters (32 bytes); generate with: openssl rand -hex 32")
+		}
+		return key
+	}
+	if sk := viper.GetString("oidc-session-key"); len(sk) == 128 {
+		if _, err := hex.DecodeString(sk); err == nil {
+			return server.DeriveKey(sk, "audit-email-redact")
+		}
+	}
+	key := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, key); err != nil {
+		logger.Fatal("failed to generate audit redaction key", zap.Error(err))
+	}
+	logger.Warn("--audit-redact-email is enabled without --audit-redact-key or a 128-hex --oidc-session-key; using an ephemeral random key. Email digests will not correlate across restarts or instances. Set --audit-redact-key (openssl rand -hex 32) for stable correlation.")
+	return key
 }
 
 // listenAndServe starts a HTTP server on the given addr. It uses TLS if both

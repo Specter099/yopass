@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -25,6 +26,7 @@ import (
 	"github.com/jhaals/yopass/pkg/yopass"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/viper"
+	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
@@ -578,6 +580,8 @@ func TestIsValidCSSColorValue(t *testing.T) {
 		"red; --evil: stolen",
 		"red} html { display:none",
 		"url(javascript:alert(1))",
+		"url(//evil.example/x)",
+		"//evil.example/x",
 		"blue\nyellow",
 		"red /* comment */",
 		"red:blue",
@@ -595,5 +599,38 @@ func TestIsValidCSSColorValue(t *testing.T) {
 			t.Errorf("expected %q to be REJECTED", v)
 		}
 	}
+}
+
+// TestResolveAuditRedactKey covers the three key sources for email redaction:
+// an explicit --audit-redact-key, derivation from a 128-hex --oidc-session-key,
+// and the ephemeral random fallback.
+func TestResolveAuditRedactKey(t *testing.T) {
+	logger := zap.NewNop()
+
+	t.Run("explicit key", func(t *testing.T) {
+		viper.Reset()
+		hexKey := strings.Repeat("ab", 32) // 32 bytes
+		viper.Set("audit-redact-key", hexKey)
+		got := resolveAuditRedactKey(logger)
+		want, _ := hex.DecodeString(hexKey)
+		assert.Equal(t, want, got)
+	})
+
+	t.Run("derived from oidc-session-key is stable", func(t *testing.T) {
+		viper.Reset()
+		viper.Set("oidc-session-key", strings.Repeat("cd", 64)) // 128 hex chars
+		a := resolveAuditRedactKey(logger)
+		b := resolveAuditRedactKey(logger)
+		assert.Len(t, a, 32)
+		assert.Equal(t, a, b, "derivation must be deterministic for cross-instance correlation")
+	})
+
+	t.Run("ephemeral fallback is random", func(t *testing.T) {
+		viper.Reset()
+		a := resolveAuditRedactKey(logger)
+		b := resolveAuditRedactKey(logger)
+		assert.Len(t, a, 32)
+		assert.NotEqual(t, a, b, "ephemeral keys should differ each call")
+	})
 }
 

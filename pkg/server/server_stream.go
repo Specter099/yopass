@@ -32,7 +32,7 @@ func (y *Server) streamUpload(w http.ResponseWriter, r *http.Request) {
 			ClientIP: clientIP, UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "invalid content-type",
 		})
-		http.Error(w, `{"message": "Content-Type must be application/octet-stream"}`, http.StatusBadRequest)
+		writeJSONError(w, `{"message": "Content-Type must be application/octet-stream"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -44,7 +44,7 @@ func (y *Server) streamUpload(w http.ResponseWriter, r *http.Request) {
 			ClientIP: clientIP, UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "missing expiration header",
 		})
-		http.Error(w, `{"message": "X-Yopass-Expiration header required"}`, http.StatusBadRequest)
+		writeJSONError(w, `{"message": "X-Yopass-Expiration header required"}`, http.StatusBadRequest)
 		return
 	}
 	expiration, err := strconv.ParseInt(expirationStr, 10, 32)
@@ -54,7 +54,7 @@ func (y *Server) streamUpload(w http.ResponseWriter, r *http.Request) {
 			ClientIP: clientIP, UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "invalid expiration",
 		})
-		http.Error(w, `{"message": "Invalid expiration specified"}`, http.StatusBadRequest)
+		writeJSONError(w, `{"message": "Invalid expiration specified"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -67,7 +67,7 @@ func (y *Server) streamUpload(w http.ResponseWriter, r *http.Request) {
 			ClientIP: clientIP, UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "one-time required by server policy",
 		})
-		http.Error(w, `{"message": "Secret must be one time download"}`, http.StatusBadRequest)
+		writeJSONError(w, `{"message": "Secret must be one time download"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -78,7 +78,7 @@ func (y *Server) streamUpload(w http.ResponseWriter, r *http.Request) {
 			ClientIP: clientIP, UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "auth required but OIDC not configured",
 		})
-		http.Error(w, `{"message": "Authentication not configured on this server"}`, http.StatusBadRequest)
+		writeJSONError(w, `{"message": "Authentication not configured on this server"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -89,7 +89,7 @@ func (y *Server) streamUpload(w http.ResponseWriter, r *http.Request) {
 			ClientIP: clientIP, UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "file too large",
 		})
-		http.Error(w, `{"message": "File too large"}`, http.StatusRequestEntityTooLarge)
+		writeJSONError(w, `{"message": "File too large"}`, http.StatusRequestEntityTooLarge)
 		return
 	}
 
@@ -107,7 +107,7 @@ func (y *Server) streamUpload(w http.ResponseWriter, r *http.Request) {
 			ClientIP: clientIP, UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "not an OpenPGP message",
 		})
-		http.Error(w, `{"message": "Invalid data: not an OpenPGP message"}`, http.StatusBadRequest)
+		writeJSONError(w, `{"message": "Invalid data: not an OpenPGP message"}`, http.StatusBadRequest)
 		return
 	}
 	if !isOpenPGPBinary(peek[0]) {
@@ -116,7 +116,7 @@ func (y *Server) streamUpload(w http.ResponseWriter, r *http.Request) {
 			ClientIP: clientIP, UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "not an OpenPGP message",
 		})
-		http.Error(w, `{"message": "Invalid data: not an OpenPGP message"}`, http.StatusBadRequest)
+		writeJSONError(w, `{"message": "Invalid data: not an OpenPGP message"}`, http.StatusBadRequest)
 		return
 	}
 	body = io.MultiReader(bytes.NewReader(peek[:]), body)
@@ -130,7 +130,7 @@ func (y *Server) streamUpload(w http.ResponseWriter, r *http.Request) {
 			ClientIP: clientIP, UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "failed to generate ID",
 		})
-		http.Error(w, `{"message": "Unable to generate ID"}`, http.StatusInternalServerError)
+		writeJSONError(w, `{"message": "Unable to generate ID"}`, http.StatusInternalServerError)
 		return
 	}
 
@@ -147,7 +147,7 @@ func (y *Server) streamUpload(w http.ResponseWriter, r *http.Request) {
 				UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 				Error: "file too large",
 			})
-			http.Error(w, `{"message": "File too large"}`, http.StatusRequestEntityTooLarge)
+			writeJSONError(w, `{"message": "File too large"}`, http.StatusRequestEntityTooLarge)
 		} else {
 			y.audit().Log(AuditEvent{
 				Timestamp: time.Now().UTC(), Event: "file.uploaded", Outcome: OutcomeFailure,
@@ -155,7 +155,7 @@ func (y *Server) streamUpload(w http.ResponseWriter, r *http.Request) {
 				UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 				Error: "failed to store file",
 			})
-			http.Error(w, `{"message": "Failed to store file"}`, http.StatusInternalServerError)
+			writeJSONError(w, `{"message": "Failed to store file"}`, http.StatusInternalServerError)
 		}
 		return
 	}
@@ -178,7 +178,7 @@ func (y *Server) streamUpload(w http.ResponseWriter, r *http.Request) {
 			UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "failed to store metadata",
 		})
-		http.Error(w, `{"message": "Failed to store metadata"}`, http.StatusInternalServerError)
+		writeJSONError(w, `{"message": "Failed to store metadata"}`, http.StatusInternalServerError)
 		return
 	}
 
@@ -215,7 +215,7 @@ func (y *Server) streamDownload(w http.ResponseWriter, r *http.Request) {
 			UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "not found",
 		})
-		http.Error(w, `{"message": "Secret not found"}`, http.StatusNotFound)
+		writeJSONError(w, `{"message": "Secret not found"}`, http.StatusNotFound)
 		return
 	}
 
@@ -227,7 +227,7 @@ func (y *Server) streamDownload(w http.ResponseWriter, r *http.Request) {
 				ClientIP: clientIP, SecretID: key, RequireAuth: boolPtr(true),
 				Error: "authentication required",
 			})
-			http.Error(w, `{"message": "authentication required"}`, http.StatusUnauthorized)
+			writeJSONError(w, `{"message": "authentication required"}`, http.StatusUnauthorized)
 			return
 		}
 		if !emailAllowed(session.Email) {
@@ -237,7 +237,7 @@ func (y *Server) streamDownload(w http.ResponseWriter, r *http.Request) {
 				UserEmail: session.Email, UserSubject: session.Sub,
 				Error: "email domain not permitted",
 			})
-			http.Error(w, `{"message": "email domain not permitted"}`, http.StatusForbidden)
+			writeJSONError(w, `{"message": "email domain not permitted"}`, http.StatusForbidden)
 			return
 		}
 	}
@@ -257,7 +257,7 @@ func (y *Server) streamDownload(w http.ResponseWriter, r *http.Request) {
 				UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 				Error: "failed to claim one-time secret",
 			})
-			http.Error(w, `{"message": "Failed to process secret"}`, http.StatusInternalServerError)
+			writeJSONError(w, `{"message": "Failed to process secret"}`, http.StatusInternalServerError)
 			return
 		}
 		if !deleted {
@@ -267,7 +267,7 @@ func (y *Server) streamDownload(w http.ResponseWriter, r *http.Request) {
 				UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 				Error: "claimed by concurrent request",
 			})
-			http.Error(w, `{"message": "Secret not found"}`, http.StatusNotFound)
+			writeJSONError(w, `{"message": "Secret not found"}`, http.StatusNotFound)
 			return
 		}
 	}
@@ -289,7 +289,7 @@ func (y *Server) streamDownload(w http.ResponseWriter, r *http.Request) {
 			UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "file not found in store",
 		})
-		http.Error(w, `{"message": "File not found"}`, http.StatusNotFound)
+		writeJSONError(w, `{"message": "File not found"}`, http.StatusNotFound)
 		return
 	}
 	defer reader.Close()
@@ -349,7 +349,7 @@ func (y *Server) deleteStreamSecret(w http.ResponseWriter, r *http.Request) {
 			UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "not found",
 		})
-		http.Error(w, `{"message": "Secret not found"}`, http.StatusNotFound)
+		writeJSONError(w, `{"message": "Secret not found"}`, http.StatusNotFound)
 		return
 	}
 
@@ -361,7 +361,7 @@ func (y *Server) deleteStreamSecret(w http.ResponseWriter, r *http.Request) {
 				ClientIP: clientIP, SecretID: key, RequireAuth: boolPtr(true),
 				Error: "authentication required",
 			})
-			http.Error(w, `{"message": "authentication required"}`, http.StatusUnauthorized)
+			writeJSONError(w, `{"message": "authentication required"}`, http.StatusUnauthorized)
 			return
 		}
 		if !emailAllowed(session.Email) {
@@ -371,7 +371,7 @@ func (y *Server) deleteStreamSecret(w http.ResponseWriter, r *http.Request) {
 				UserEmail: session.Email, UserSubject: session.Sub,
 				Error: "email domain not permitted",
 			})
-			http.Error(w, `{"message": "email domain not permitted"}`, http.StatusForbidden)
+			writeJSONError(w, `{"message": "email domain not permitted"}`, http.StatusForbidden)
 			return
 		}
 	}
@@ -384,7 +384,7 @@ func (y *Server) deleteStreamSecret(w http.ResponseWriter, r *http.Request) {
 			UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "database error",
 		})
-		http.Error(w, `{"message": "Failed to delete secret"}`, http.StatusInternalServerError)
+		writeJSONError(w, `{"message": "Failed to delete secret"}`, http.StatusInternalServerError)
 		return
 	}
 	if !deleted {
@@ -394,7 +394,7 @@ func (y *Server) deleteStreamSecret(w http.ResponseWriter, r *http.Request) {
 			UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "not found",
 		})
-		http.Error(w, `{"message": "Secret not found"}`, http.StatusNotFound)
+		writeJSONError(w, `{"message": "Secret not found"}`, http.StatusNotFound)
 		return
 	}
 
@@ -406,7 +406,7 @@ func (y *Server) deleteStreamSecret(w http.ResponseWriter, r *http.Request) {
 			UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "failed to delete file from store",
 		})
-		http.Error(w, `{"message": "Failed to delete secret file"}`, http.StatusInternalServerError)
+		writeJSONError(w, `{"message": "Failed to delete secret file"}`, http.StatusInternalServerError)
 		return
 	}
 
@@ -436,7 +436,7 @@ func (y *Server) getStreamSecretStatus(w http.ResponseWriter, r *http.Request) {
 			UserEmail: sessionEmail(session), UserSubject: sessionSub(session),
 			Error: "not found",
 		})
-		http.Error(w, `{"message": "Secret not found"}`, http.StatusNotFound)
+		writeJSONError(w, `{"message": "Secret not found"}`, http.StatusNotFound)
 		return
 	}
 
