@@ -19,6 +19,13 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 )
 
+// Valid secret expiration times in seconds.
+const (
+	ExpirationHour int32 = 3600
+	ExpirationDay  int32 = 86400
+	ExpirationWeek int32 = 604800
+)
+
 // ErrEmptyKey is returned when no encryption key is provided.
 var ErrEmptyKey = errors.New("empty encryption key")
 

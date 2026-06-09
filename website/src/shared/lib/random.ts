@@ -1,6 +1,6 @@
 export function randomInt(min: number, max: number): number {
   const byteArray = new Uint8Array(1);
-  window.crypto.getRandomValues(byteArray);
+  globalThis.crypto.getRandomValues(byteArray);
 
   const range = max - min;
   const maxRange = 256;

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/go-jose/go-jose/v4"
+	"github.com/gorilla/securecookie"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/viper"
 	"github.com/zitadel/oidc/v3/pkg/client/rp"
@@ -19,6 +20,26 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// mustCookieCodec is a test helper for the error-returning NewCookieCodec.
+func mustCookieCodec(t *testing.T, key string) *securecookie.SecureCookie {
+	t.Helper()
+	codec, err := NewCookieCodec(key)
+	if err != nil {
+		t.Fatalf("NewCookieCodec: %v", err)
+	}
+	return codec
+}
+
+// mustDeriveKey is a test helper for the error-returning deriveKey.
+func mustDeriveKey(t *testing.T, master, label string) []byte {
+	t.Helper()
+	k, err := deriveKey(master, label)
+	if err != nil {
+		t.Fatalf("deriveKey: %v", err)
+	}
+	return k
+}
+
 // newOIDCTestServer returns a Server wired with a real CookieCodec but no OIDCProvider.
 func newOIDCTestServer(t *testing.T) Server {
 	t.Helper()
@@ -27,15 +48,15 @@ func newOIDCTestServer(t *testing.T) Server {
 		FileStore:   NewDatabaseFileStore(&mockDB{}),
 		Registry:    prometheus.NewRegistry(),
 		Logger:      zaptest.NewLogger(t),
-		CookieCodec: NewCookieCodec(""),
+		CookieCodec: mustCookieCodec(t, ""),
 	}
 }
 
 // --- deriveKey ---
 
 func TestDeriveKey_EmptyFallsBackToRandom(t *testing.T) {
-	k1 := deriveKey("", "label")
-	k2 := deriveKey("", "label")
+	k1 := mustDeriveKey(t, "", "label")
+	k2 := mustDeriveKey(t, "", "label")
 	if len(k1) != 32 {
 		t.Fatalf("expected 32-byte key, got %d", len(k1))
 	}
@@ -45,7 +66,7 @@ func TestDeriveKey_EmptyFallsBackToRandom(t *testing.T) {
 }
 
 func TestDeriveKey_InvalidHexFallsBackToRandom(t *testing.T) {
-	k := deriveKey(strings.Repeat("zz", 64), "label")
+	k := mustDeriveKey(t, strings.Repeat("zz", 64), "label")
 	if len(k) != 32 {
 		t.Fatalf("expected 32-byte key, got %d", len(k))
 	}
@@ -53,8 +74,8 @@ func TestDeriveKey_InvalidHexFallsBackToRandom(t *testing.T) {
 
 func TestDeriveKey_Deterministic(t *testing.T) {
 	master := strings.Repeat("ab", 64) // valid 128-hex
-	k1 := deriveKey(master, "label")
-	k2 := deriveKey(master, "label")
+	k1 := mustDeriveKey(t, master, "label")
+	k2 := mustDeriveKey(t, master, "label")
 	if string(k1) != string(k2) {
 		t.Fatal("same master+label should produce the same key")
 	}
@@ -62,8 +83,8 @@ func TestDeriveKey_Deterministic(t *testing.T) {
 
 func TestDeriveKey_DifferentLabels(t *testing.T) {
 	master := strings.Repeat("ab", 64)
-	k1 := deriveKey(master, "oidc-state-hash")
-	k2 := deriveKey(master, "oidc-state-enc")
+	k1 := mustDeriveKey(t, master, "oidc-state-hash")
+	k2 := mustDeriveKey(t, master, "oidc-state-enc")
 	if string(k1) == string(k2) {
 		t.Fatal("different labels should produce different keys")
 	}
@@ -73,7 +94,7 @@ func TestDeriveKey_DifferentLabels(t *testing.T) {
 
 func TestNewCookieCodec_RandomKeys(t *testing.T) {
 	// Empty key → random keys; codec must still encode/decode.
-	codec := NewCookieCodec("")
+	codec := mustCookieCodec(t, "")
 	var want = "hello"
 	encoded, err := codec.Encode("test", want)
 	if err != nil {
@@ -91,8 +112,8 @@ func TestNewCookieCodec_RandomKeys(t *testing.T) {
 func TestNewCookieCodec_DeterministicKey(t *testing.T) {
 	// Valid 128-hex key → both codecs must produce the same result.
 	key := strings.Repeat("ab", 64) // 128 hex chars = 64 bytes
-	c1 := NewCookieCodec(key)
-	c2 := NewCookieCodec(key)
+	c1 := mustCookieCodec(t, key)
+	c2 := mustCookieCodec(t, key)
 
 	encoded, err := c1.Encode("test", "value")
 	if err != nil {
@@ -112,12 +133,12 @@ func TestNewCookieCodec_InvalidHexFallsBackToRandom(t *testing.T) {
 	// Validation before calling NewCookieCodec (done in main) prevents this
 	// path in production, but the function still generates random keys as a
 	// safety net so callers without validation don't get a nil codec.
-	codec := NewCookieCodec(strings.Repeat("zz", 64))
+	codec := mustCookieCodec(t, strings.Repeat("zz", 64))
 	if codec == nil {
 		t.Fatal("expected non-nil codec")
 	}
 	// Different random key each time means the two codecs can't cross-decode.
-	other := NewCookieCodec(strings.Repeat("zz", 64))
+	other := mustCookieCodec(t, strings.Repeat("zz", 64))
 	encoded, _ := codec.Encode("test", "x")
 	var got string
 	if err := other.Decode("test", encoded, &got); err == nil {

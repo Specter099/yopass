@@ -76,6 +76,7 @@ function Result({
   const [copiedOneClick, setCopiedOneClick] = useState(false);
   const [copiedShortLink, setCopiedShortLink] = useState(false);
   const [copiedPassword, setCopiedPassword] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
 
   async function copyToClipboard(
     text: string,
@@ -83,10 +84,13 @@ function Result({
   ) {
     try {
       await navigator.clipboard.writeText(text);
+      setCopyFailed(false);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
-      // noop
+      // Clipboard access can be denied by browser permissions; tell the
+      // user instead of failing silently.
+      setCopyFailed(true);
     }
   }
 
@@ -111,6 +115,11 @@ function Result({
         <h2 className="text-2xl font-bold">{t('result.title')}</h2>
       </div>
       <p className="mb-6 text-base">{t('result.subtitle')}</p>
+      {copyFailed && (
+        <p role="alert" className="text-error text-sm mb-4">
+          {t('common.copyFailed')}
+        </p>
+      )}
       {oneTime && (
         <div className="alert alert-warning mb-6 shadow-sm">
           <svg
@@ -140,8 +149,11 @@ function Result({
           <div className="font-semibold text-base mb-1 text-base-content">
             {t('result.rowLabelOneClick')}
           </div>
-          <div className="text-sm text-base-content/70 mb-4">
+          <div className="text-sm text-base-content/70 mb-1">
             {t('result.rowOneClickDescription')}
+          </div>
+          <div className="text-xs text-base-content/60 mb-4">
+            {t('result.rowOneClickHint')}
           </div>
           <div className="flex items-start gap-3">
             <CopyButton

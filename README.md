@@ -124,6 +124,8 @@ $ yopass-server -h
       --disable-features              disable features section on frontend
       --no-language-switcher          disable the language switcher in the UI
       --trusted-proxies strings       trusted proxy IP addresses or CIDR blocks for X-Forwarded-For header validation
+      --rate-limit int                max sustained requests per minute per client IP on secret and auth endpoints (0 disables rate limiting)
+      --rate-limit-burst int          burst capacity for --rate-limit (defaults to the --rate-limit value)
       --privacy-notice-url string     URL to privacy notice page
       --imprint-url string            URL to imprint/legal notice page
       --metrics-port int              metrics server listen port (default -1)
@@ -161,6 +163,17 @@ Common scenarios:
 - **Docker networks**: Use the Docker network gateway IP or subnet
 
 Without trusted proxies configured, Yopass uses the direct connection IP (recommended default).
+
+### Rate Limiting
+
+Built-in per-client rate limiting protects the secret creation, consumption and authentication endpoints from abuse. It is disabled by default; enable it with `--rate-limit`:
+
+```bash
+# Allow 60 sustained requests per minute per client IP, with bursts up to 20
+yopass-server --rate-limit 60 --rate-limit-burst 20
+```
+
+Requests over the limit receive `429 Too Many Requests`. Static assets, `/config` and the health endpoints are never rate limited. Clients are identified by their real IP — set `--trusted-proxies` when running behind a reverse proxy, otherwise all requests appear to come from the proxy and share one limit. Alternatively, configure rate limiting in your reverse proxy.
 
 ### File Storage
 

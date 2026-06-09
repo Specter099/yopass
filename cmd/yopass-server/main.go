@@ -85,6 +85,8 @@ func init() {
 	pflag.Bool("disable-features", false, "disable features")
 	pflag.Bool("no-language-switcher", false, "disable the language switcher in the UI")
 	pflag.StringSlice("trusted-proxies", []string{}, "trusted proxy IP addresses or CIDR blocks for X-Forwarded-For header validation")
+	pflag.Int("rate-limit", 0, "max sustained requests per minute per client IP on secret and auth endpoints (0 disables rate limiting)")
+	pflag.Int("rate-limit-burst", 0, "burst capacity for --rate-limit (defaults to the --rate-limit value)")
 	pflag.String("privacy-notice-url", "", "URL to privacy notice page")
 	pflag.String("imprint-url", "", "URL to imprint/legal notice page")
 	pflag.String("default-expiry", "1h", "default expiry time for secrets [1h, 1d, 1w]")
@@ -226,6 +228,12 @@ func main() {
 		}
 	}
 
+	// A malformed entry is silently ignored at request time (it fails closed),
+	// leaving wrong client IPs in logs and audit events — refuse to start instead.
+	if err := server.ValidateTrustedProxies(viper.GetStringSlice("trusted-proxies")); err != nil {
+		logger.Fatal("invalid --trusted-proxies value", zap.Error(err))
+	}
+
 	registry := setupRegistry()
 
 	licenseStatus := server.LicenseStatus{}
@@ -288,10 +296,11 @@ func main() {
 	if oidcProvider != nil {
 		sessionKey := viper.GetString("oidc-session-key")
 		if sessionKey != "" && len(sessionKey) != 128 {
-			// A non-empty key with the wrong length silently falls back to ephemeral
-			// random keys, which breaks sessions across instances behind a load
-			// balancer. Warn loudly so this misconfiguration is visible.
-			logger.Warn("--oidc-session-key has wrong length; expected 128 hex characters (generate with: openssl rand -hex 64). Falling back to ephemeral keys — multi-instance deployments will not share sessions.",
+			// A non-empty key with the wrong length would silently fall back to
+			// ephemeral random keys, which breaks sessions across instances behind
+			// a load balancer. There is no legitimate use for a wrong-length key,
+			// so refuse to start.
+			logger.Fatal("--oidc-session-key has wrong length; expected 128 hex characters (generate with: openssl rand -hex 64)",
 				zap.Int("provided_length", len(sessionKey)))
 		}
 		if len(sessionKey) == 128 {
@@ -299,7 +308,11 @@ func main() {
 				logger.Fatal("--oidc-session-key is 128 characters but not valid hex; generate with: openssl rand -hex 64")
 			}
 		}
-		cookieCodec = server.NewCookieCodec(sessionKey)
+		codec, err := server.NewCookieCodec(sessionKey)
+		if err != nil {
+			logger.Fatal("failed to initialize session cookie codec", zap.Error(err))
+		}
+		cookieCodec = codec
 	}
 
 	var auditLogger server.AuditLogger = server.NewNoopAuditLogger()
@@ -378,6 +391,8 @@ func main() {
 		OIDCProvider:        oidcProvider,
 		CookieCodec:         cookieCodec,
 		Audit:               auditLogger,
+		RateLimitPerMinute:  viper.GetInt("rate-limit"),
+		RateLimitBurst:      viper.GetInt("rate-limit-burst"),
 	}
 	// Start cleanup goroutine for file store (disk or S3)
 	cleanupCtx, cleanupCancel := context.WithCancel(context.Background())
@@ -490,7 +505,11 @@ func resolveAuditRedactKey(logger *zap.Logger) []byte {
 	}
 	if sk := viper.GetString("oidc-session-key"); len(sk) == 128 {
 		if _, err := hex.DecodeString(sk); err == nil {
-			return server.DeriveKey(sk, "audit-email-redact")
+			key, err := server.DeriveKey(sk, "audit-email-redact")
+			if err != nil {
+				logger.Fatal("failed to derive audit redaction key", zap.Error(err))
+			}
+			return key
 		}
 	}
 	key := make([]byte, 32)
