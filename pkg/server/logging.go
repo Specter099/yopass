@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -9,6 +10,23 @@ import (
 	"github.com/gorilla/handlers"
 	"go.uber.org/zap"
 )
+
+// ValidateTrustedProxies checks that every entry is a valid IP address or
+// CIDR block. A malformed entry would otherwise be silently ignored by
+// isTrustedProxy (it fails closed), leaving the operator with wrong client
+// IPs in logs and audit events without any indication why.
+func ValidateTrustedProxies(proxies []string) error {
+	for _, proxy := range proxies {
+		if _, _, err := net.ParseCIDR(proxy); err == nil {
+			continue
+		}
+		if net.ParseIP(proxy) != nil {
+			continue
+		}
+		return fmt.Errorf("invalid trusted proxy %q: must be an IP address or CIDR block", proxy)
+	}
+	return nil
+}
 
 // getRealClientIP returns the real client IP address. When the request comes
 // from a trusted proxy the first IP in X-Forwarded-For is used; otherwise

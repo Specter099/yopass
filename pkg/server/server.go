@@ -37,6 +37,11 @@ type Server struct {
 	OIDCProvider        rp.RelyingParty
 	CookieCodec         *securecookie.SecureCookie
 	Audit               AuditLogger
+	// RateLimitPerMinute caps sustained requests per client IP on secret and
+	// auth endpoints; 0 disables rate limiting. RateLimitBurst is the token
+	// bucket capacity for short bursts.
+	RateLimitPerMinute int
+	RateLimitBurst     int
 }
 
 func writeJSONError(w http.ResponseWriter, body string, code int) {
@@ -564,6 +569,13 @@ func (y *Server) HTTPHandler() http.Handler {
 	mx := mux.NewRouter()
 	mx.Use(newMetricsMiddleware(y.Registry))
 	mx.Use(corsMiddleware)
+	if y.RateLimitPerMinute > 0 {
+		burst := y.RateLimitBurst
+		if burst <= 0 {
+			burst = y.RateLimitPerMinute
+		}
+		mx.Use(y.rateLimitMiddleware(newRateLimiter(y.RateLimitPerMinute, burst)))
+	}
 
 	// Only register write endpoints if not in read-only mode
 	if !viper.GetBool("read-only") {
@@ -620,9 +632,9 @@ func (y *Server) HTTPHandler() http.Handler {
 const keyParameter = "{key:(?:[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}|[a-zA-Z0-9]{22})}"
 
 // validExpiration validates that expiration is either
-// 3600(1hour), 86400(1day) or 604800(1week)
+// one hour, one day or one week.
 func validExpiration(expiration int32) bool {
-	for _, ttl := range []int32{3600, 86400, 604800} {
+	for _, ttl := range []int32{yopass.ExpirationHour, yopass.ExpirationDay, yopass.ExpirationWeek} {
 		if ttl == expiration {
 			return true
 		}
@@ -635,13 +647,13 @@ func validExpiration(expiration int32) bool {
 func expirationInSeconds(s string) int32 {
 	switch s {
 	case "1h":
-		return 3600
+		return yopass.ExpirationHour
 	case "1d":
-		return 86400
+		return yopass.ExpirationDay
 	case "1w":
-		return 604800
+		return yopass.ExpirationWeek
 	default:
-		return 3600
+		return yopass.ExpirationHour
 	}
 }
 

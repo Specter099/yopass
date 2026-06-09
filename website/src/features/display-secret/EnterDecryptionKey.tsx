@@ -41,9 +41,12 @@ export default function EnterDecryptionKey({
         </h2>
       </div>
 
-      <p className="text-base-content/70 mb-6 text-lg">
+      <label
+        htmlFor="decryption-key"
+        className="block text-base-content/70 mb-6 text-lg"
+      >
         {t('display.inputDecryptionKeyLabel')}
-      </p>
+      </label>
 
       {errorMessage && (
         <div className="alert alert-error mb-6 shadow-sm">
@@ -70,6 +73,7 @@ export default function EnterDecryptionKey({
       <form onSubmit={handleSubmit}>
         <div className="form-control mb-8">
           <input
+            id="decryption-key"
             type="text"
             className={`input input-bordered w-full text-lg p-4 rounded-lg focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 ${
               errorMessage ? 'input-error' : ''
