@@ -9,7 +9,7 @@ RUN VERSION=${VERSION:-$(git rev-parse --short HEAD 2>/dev/null || echo "unknown
     CGO_ENABLED=0 go build ./cmd/yopass && \
     CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION}" ./cmd/yopass-server
 
-FROM node:22-bookworm AS website
+FROM node:26-bookworm AS website
 COPY website /website
 WORKDIR /website
 RUN yarn install --frozen-lockfile --network-timeout 600000 && yarn build
