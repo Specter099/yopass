@@ -1,6 +1,10 @@
 name: Test
 # yamllint disable-line rule:truthy
-on: [pull_request]
+on:
+  pull_request: {}
+  push:
+    branches:
+      - master
 jobs:
   go:
     name: Go Test
@@ -18,12 +22,14 @@ jobs:
       MEMCACHED: localhost:11211
       REDIS_URL: "redis://localhost:6379/0"
     steps:
-      - name: Set up Go
-        uses: actions/setup-go@v3
-        id: go
-
       - name: Check out code into the Go module directory
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        id: go
+        with:
+          go-version-file: go.mod
 
       - name: Go Test
         run: |
@@ -31,7 +37,7 @@ jobs:
           go test ./... -race -coverprofile=coverage.txt -covermode=atomic -v
 
       - name: codecov upload
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
   node:
@@ -54,11 +60,26 @@ jobs:
       - name: Lint
         run: yarn tsc && yarn run lint
 
+      - name: Unit tests
+        run: yarn test:unit
+
+      - name: Get Playwright version
+        id: playwright-version
+        run: echo "version=$(node -e "console.log(require('./node_modules/@playwright/test/package.json').version)")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ steps.playwright-version.outputs.version }}
+
       - name: Install Playwright Browsers
-        run: npx playwright install --with-deps
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install chromium
 
       - name: Run Playwright tests
-        run: yarn test
+        run: yarn test --project=chromium
         env:
           CI: true
 

@@ -36,7 +36,7 @@ type sessionData struct {
 // HMAC (first 32 bytes) and AES-256 (last 32 bytes) keys — required for
 // multi-instance deployments behind a load balancer.
 // Otherwise two 32-byte random keys are generated at startup (single-instance only).
-func NewCookieCodec(key string) *securecookie.SecureCookie {
+func NewCookieCodec(key string) (*securecookie.SecureCookie, error) {
 	var hashKey, encryptKey []byte
 
 	if len(key) == 128 {
@@ -51,40 +51,40 @@ func NewCookieCodec(key string) *securecookie.SecureCookie {
 		hashKey = make([]byte, 32)
 		encryptKey = make([]byte, 32)
 		if _, err := io.ReadFull(rand.Reader, hashKey); err != nil {
-			panic("oidc: failed to generate session hash key: " + err.Error())
+			return nil, fmt.Errorf("oidc: failed to generate session hash key: %w", err)
 		}
 		if _, err := io.ReadFull(rand.Reader, encryptKey); err != nil {
-			panic("oidc: failed to generate session encrypt key: " + err.Error())
+			return nil, fmt.Errorf("oidc: failed to generate session encrypt key: %w", err)
 		}
 	}
 
-	return securecookie.New(hashKey, encryptKey)
+	return securecookie.New(hashKey, encryptKey), nil
 }
 
 // DeriveKey exposes deriveKey to callers outside the package (e.g. the audit
 // email-redaction key in cmd/yopass-server), deriving a labelled subkey from
 // the same 128-hex master secret used for OIDC.
-func DeriveKey(masterHex, label string) []byte {
+func DeriveKey(masterHex, label string) ([]byte, error) {
 	return deriveKey(masterHex, label)
 }
 
 // deriveKey returns a 32-byte key derived from masterHex using HKDF-SHA256 with label as info.
 // Falls back to a fresh random key if masterHex is empty or invalid.
-func deriveKey(masterHex, label string) []byte {
+func deriveKey(masterHex, label string) ([]byte, error) {
 	raw, err := hex.DecodeString(masterHex)
 	if err != nil || len(raw) != 64 {
 		k := make([]byte, 32)
 		if _, err := io.ReadFull(rand.Reader, k); err != nil {
-			panic("oidc: failed to generate key: " + err.Error())
+			return nil, fmt.Errorf("oidc: failed to generate key: %w", err)
 		}
-		return k
+		return k, nil
 	}
 	r := hkdf.New(sha256.New, raw, nil, []byte(label))
 	k := make([]byte, 32)
 	if _, err := io.ReadFull(r, k); err != nil {
-		panic("oidc: failed to derive key: " + err.Error())
+		return nil, fmt.Errorf("oidc: failed to derive key: %w", err)
 	}
-	return k
+	return k, nil
 }
 
 // NewOIDCProvider creates a zitadel relying party from viper flags.
@@ -104,8 +104,14 @@ func NewOIDCProvider(ctx context.Context, logger *zap.Logger, sessionKey string)
 	// State/PKCE cookie keys. When sessionKey is provided (multi-instance deployments)
 	// keys are derived deterministically so any instance can verify the cookie.
 	// Otherwise fresh random keys are generated (ephemeral, single-instance only).
-	cookieHashKey := deriveKey(sessionKey, "oidc-state-hash")
-	cookieEncKey := deriveKey(sessionKey, "oidc-state-enc")
+	cookieHashKey, err := deriveKey(sessionKey, "oidc-state-hash")
+	if err != nil {
+		return nil, err
+	}
+	cookieEncKey, err := deriveKey(sessionKey, "oidc-state-enc")
+	if err != nil {
+		return nil, err
+	}
 	cookieHandler := httphelper.NewCookieHandler(cookieHashKey, cookieEncKey)
 
 	options := []rp.Option{
@@ -134,6 +140,9 @@ func NewOIDCProvider(ctx context.Context, logger *zap.Logger, sessionKey string)
 }
 
 // randomState generates a random hex string for OIDC state parameter.
+// The panic is deliberate: rp.AuthURLHandler requires a func() string
+// callback so an error cannot be returned, crypto/rand failure is
+// unrecoverable, and net/http recovers handler panics per-request.
 func randomState() string {
 	b := make([]byte, 16)
 	if _, err := io.ReadFull(rand.Reader, b); err != nil {

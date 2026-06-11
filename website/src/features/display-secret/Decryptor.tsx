@@ -13,6 +13,7 @@ export default function Decryptor({ secret }: { secret: string }) {
   const [password, setPassword] = useState(() => paramsPassword ?? '');
   const [showQR, setShowQR] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
 
   const { loading, error, value } = useAsync(async () => {
     if (!password) {
@@ -59,13 +60,16 @@ export default function Decryptor({ secret }: { secret: string }) {
   }, [value]);
 
   async function handleCopy() {
+    if (!value || value.isFile) return;
     try {
-      if (!value || value.isFile) return;
       await navigator.clipboard.writeText(value.data as string);
+      setCopyFailed(false);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
-      // noop
+      // Clipboard access can be denied by browser permissions; tell the
+      // user instead of failing silently.
+      setCopyFailed(true);
     }
   }
 
@@ -270,6 +274,11 @@ export default function Decryptor({ secret }: { secret: string }) {
           </button>
         )}
       </div>
+      {copyFailed && (
+        <p role="alert" className="text-error text-sm text-center mb-6">
+          {t('common.copyFailed')}
+        </p>
+      )}
       {showQR && !tooLongForQRCode && (
         <div className="mt-8 flex justify-center">
           <div className="bg-base-100 border border-base-300 rounded-lg p-6 shadow-sm">

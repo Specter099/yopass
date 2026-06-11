@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next';
 
 export default function LanguageSwitcher() {
-  const { i18n } = useTranslation();
+  const { i18n, t } = useTranslation();
 
   const languages = [
     { code: 'en', name: 'English' },
@@ -30,7 +30,8 @@ export default function LanguageSwitcher() {
         tabIndex={0}
         role="button"
         className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-base-content hover:text-primary hover:bg-base-200 rounded-lg transition-all duration-200 cursor-pointer"
-        title="Change language"
+        title={t('header.changeLanguage')}
+        aria-label={t('header.changeLanguage')}
       >
         <svg
           xmlns="http://www.w3.org/2000/svg"

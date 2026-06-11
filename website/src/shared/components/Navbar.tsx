@@ -154,7 +154,14 @@ export default function Navbar() {
               onClick={toggleTheme}
               className="p-2 rounded-md hover:bg-base-200 transition-all duration-200 text-base-content hover:text-primary"
               title={
-                mode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'
+                mode === 'dark'
+                  ? t('header.switchToLightMode')
+                  : t('header.switchToDarkMode')
+              }
+              aria-label={
+                mode === 'dark'
+                  ? t('header.switchToLightMode')
+                  : t('header.switchToDarkMode')
               }
             >
               {mode === 'dark' ? (

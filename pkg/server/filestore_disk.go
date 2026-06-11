@@ -106,7 +106,9 @@ func (d *DiskFileStore) Load(_ context.Context, key string) (io.ReadCloser, int6
 
 // Delete removes the file and its metadata sidecar.
 func (d *DiskFileStore) Delete(_ context.Context, key string) error {
-	os.Remove(d.metaPath(key))
+	if err := os.Remove(d.metaPath(key)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("could not delete metadata: %w", err)
+	}
 	if err := os.Remove(d.binPath(key)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("could not delete file: %w", err)
 	}

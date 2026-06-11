@@ -1,18 +1,20 @@
-FROM golang:bookworm AS app
-RUN mkdir -p /yopass
+FROM golang:1.25-bookworm AS app
 WORKDIR /yopass
+# Download modules first so the layer is cached across source changes.
+COPY go.mod go.sum ./
+RUN go mod download
 COPY . .
 ARG VERSION
 RUN VERSION=${VERSION:-$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")} && \
-    go build ./cmd/yopass && \
-    go build -ldflags "-X main.version=${VERSION}" ./cmd/yopass-server
+    CGO_ENABLED=0 go build ./cmd/yopass && \
+    CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION}" ./cmd/yopass-server
 
-FROM node:22 AS website
+FROM node:22-bookworm AS website
 COPY website /website
 WORKDIR /website
-RUN yarn install --network-timeout 600000 && yarn build
+RUN yarn install --frozen-lockfile --network-timeout 600000 && yarn build
 
-FROM gcr.io/distroless/base
+FROM gcr.io/distroless/static-debian12
 COPY --from=app /yopass/yopass /yopass/yopass-server /
 COPY --from=website /website/dist /public
 USER 1000

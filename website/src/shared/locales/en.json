@@ -61,6 +61,7 @@
     "reminderTitle": "Remember",
     "rowLabelOneClick": "One-click link",
     "rowOneClickDescription": "Share this link for direct access to the secret",
+    "rowOneClickHint": "Anyone with this link can read the secret, and it may persist in browser history or chat logs. For sensitive secrets, share the short link and decryption key through separate channels.",
     "rowLabelShortLink": "Short link",
     "rowShortLinkDescription": "Requires the decryption key to be shared separately",
     "rowLabelDecryptionKey": "Decryption key",
@@ -115,11 +116,15 @@
     "buttonHome": "Home",
     "buttonUpload": "Upload",
     "buttonText": "Text",
-    "appName": "Yopass"
+    "appName": "Yopass",
+    "changeLanguage": "Change language",
+    "switchToLightMode": "Switch to light mode",
+    "switchToDarkMode": "Switch to dark mode"
   },
   "common": {
     "copy": "Copy",
-    "copied": "Copied!"
+    "copied": "Copied!",
+    "copyFailed": "Copying to the clipboard failed — please copy manually"
   },
   "footer": {
     "privacyNotice": "Privacy Notice",

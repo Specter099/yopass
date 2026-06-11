@@ -244,11 +244,11 @@ func encryptionKey(key string) (string, error) {
 func expiration(s string) int32 {
 	switch s {
 	case "1h":
-		return 3600
+		return yopass.ExpirationHour
 	case "1d":
-		return 3600 * 24
+		return yopass.ExpirationDay
 	case "1w":
-		return 3600 * 24 * 7
+		return yopass.ExpirationWeek
 	default:
 		return 0
 	}

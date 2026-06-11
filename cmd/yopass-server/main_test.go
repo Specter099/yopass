@@ -204,7 +204,7 @@ func TestSetupDatabaseRedisWithInvalidUrl(t *testing.T) {
 	logger := zap.New(core)
 
 	_, err := setupDatabase(logger)
-	expected := `invalid Redis URL: invalid redis URL scheme: `
+	expected := `invalid Redis URL: redis: invalid URL scheme: `
 	if err.Error() != expected {
 		t.Fatalf("Expected '%s', got '%v'", expected, err.Error())
 	}

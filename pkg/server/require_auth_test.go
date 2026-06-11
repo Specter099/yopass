@@ -35,7 +35,7 @@ func newServerWithOIDC(t *testing.T, db Database) Server {
 		Registry:    prometheus.NewRegistry(),
 		Logger:      zaptest.NewLogger(t),
 		OIDCProvider: &mockOIDCProvider{},
-		CookieCodec:  NewCookieCodec(""),
+		CookieCodec:  mustCookieCodec(t, ""),
 	}
 }
 
@@ -368,7 +368,7 @@ func TestStreamUploadRequireAuth_WithOIDC_Stores(t *testing.T) {
 		Registry:     prometheus.NewRegistry(),
 		Logger:       zaptest.NewLogger(t),
 		OIDCProvider: &mockOIDCProvider{},
-		CookieCodec:  NewCookieCodec(""),
+		CookieCodec:  mustCookieCodec(t, ""),
 	}
 
 	req := streamUploadRequest(pgpBody("encrypted-data"), "3600", "false", "secret.bin")
@@ -468,7 +468,7 @@ func TestStreamDownload_RequireAuth(t *testing.T) {
 				Registry:     prometheus.NewRegistry(),
 				Logger:       zaptest.NewLogger(t),
 				OIDCProvider: &mockOIDCProvider{},
-				CookieCodec:  NewCookieCodec(""),
+				CookieCodec:  mustCookieCodec(t, ""),
 			}
 
 			// Upload a file first with the appropriate RequireAuth setting.
@@ -530,7 +530,7 @@ func TestGetStreamSecretStatus_RequireAuthField(t *testing.T) {
 				Registry:     prometheus.NewRegistry(),
 				Logger:       zaptest.NewLogger(t),
 				OIDCProvider: &mockOIDCProvider{},
-				CookieCodec:  NewCookieCodec(""),
+				CookieCodec:  mustCookieCodec(t, ""),
 			}
 
 			// Upload with the desired RequireAuth setting.
