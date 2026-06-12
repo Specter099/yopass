@@ -1,0 +1,75 @@
+name: Deploy site
+
+# Deploys the CDK stack (CloudFront + S3 SPA + API Gateway + Lambda +
+# DynamoDB) that serves yopass.thelauerfam.com. Runs after the Test
+# workflow succeeds on master, so a broken build can never deploy.
+# yamllint disable-line rule:truthy
+on:
+  workflow_run:
+    workflows: ["Test"]
+    types: [completed]
+    branches: [master]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-site
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: CDK deploy
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    permissions:
+      # Keyless authentication to AWS via GitHub's OIDC provider
+      id-token: write
+      contents: read
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: "yarn"
+          cache-dependency-path: website/yarn.lock
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: deploy/cdk/go.mod
+          cache-dependency-path: deploy/cdk/go.sum
+
+      - name: Build website
+        working-directory: website
+        run: |
+          yarn install --frozen-lockfile --network-timeout 600000
+          yarn build
+
+      - name: Build Lambda bundle
+        working-directory: deploy/cdk
+        run: |
+          npm ci
+          npm run build
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::451645558365:role/github-actions-role
+          aws-region: us-east-1
+
+      - name: CDK deploy
+        working-directory: deploy/cdk
+        run: |
+          npx cdk deploy CdkStack \
+          --require-approval never \
+          -c domainName=yopass.thelauerfam.com \
+          -c hostedZoneName=thelauerfam.com
+
+      - name: Verify deployed site
+        run: |
+          sleep 30
+          STATUS=$(curl -sS -m 30 -o /dev/null -w '%{http_code}' https://yopass.thelauerfam.com/)
+          echo "site returned HTTP ${STATUS}"
+          test "${STATUS}" = "200"
