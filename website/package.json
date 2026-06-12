@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "resolutions": {
-    "vite": "^8.0.10"
+    "vite": "^8.0.16"
   },
   "scripts": {
     "dev": "vite",
@@ -28,12 +28,12 @@
     "react-dom": "^19.1.0",
     "react-hook-form": "^7.74.0",
     "react-i18next": "^17.0.6",
-    "react-router-dom": "^7.14.2",
+    "react-router-dom": "^7.17.0",
     "react-use": "^17.6.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@playwright/test": "^1.59.1",
+    "@playwright/test": "^1.60.0",
     "@tailwindcss/vite": "^4.2.2",
     "@types/node": "^25.6.0",
     "@types/react": "^19.1.4",
@@ -50,7 +50,7 @@
     "tailwindcss": "^4.2.4",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.59.1",
-    "vite": "^8.0.10",
+    "vite": "^8.0.16",
     "vitest": "^4.1.8"
   }
 }
