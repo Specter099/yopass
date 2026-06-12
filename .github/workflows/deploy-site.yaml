@@ -61,11 +61,13 @@ jobs:
 
       - name: CDK deploy
         working-directory: deploy/cdk
-        run: |
-          npx cdk deploy CdkStack \
-          --require-approval never \
-          -c domainName=yopass.thelauerfam.com \
-          -c hostedZoneName=thelauerfam.com
+        # bin/cdk.ts reads these env vars as a fallback to CDK context.
+        # Passing them via -c proved unreliable here (the context didn't
+        # reach the app process), so set them in the environment instead.
+        env:
+          YOPASS_DOMAIN_NAME: yopass.thelauerfam.com
+          YOPASS_HOSTED_ZONE: thelauerfam.com
+        run: npx cdk deploy CdkStack --require-approval never
 
       - name: Verify deployed site
         run: |
