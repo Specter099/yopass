@@ -10,8 +10,9 @@ RUN VERSION=${VERSION:-$(git rev-parse --short HEAD 2>/dev/null || echo "unknown
     CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION}" ./cmd/yopass-server
 
 FROM node:26-bookworm AS website
-# node:26 no longer bundles Yarn; enable it via corepack (ships with Node).
-RUN corepack enable
+# node:26 bundles neither Yarn nor corepack; install Yarn 1.x (matches the
+# v1 lockfile) via the bundled npm.
+RUN npm install -g yarn@1.22.22
 COPY website /website
 WORKDIR /website
 RUN yarn install --frozen-lockfile --network-timeout 600000 && yarn build
