@@ -68,16 +68,24 @@ jobs:
           CDK_DEFAULT_ACCOUNT: "451645558365"
           CDK_DEFAULT_REGION: us-east-1
         # Build the Lambda bundle and deploy in one step so node_modules is
-        # guaranteed present, and invoke the local cdk binary directly: a
-        # bare `npx cdk` silently fell back to an unrelated `cdk` package
-        # and exited 0 without deploying. `npm exec --no` errors instead of
-        # fetching anything, and `--verbose` keeps the deploy auditable.
+        # guaranteed present. Invoke the CDK CLI entrypoint with node
+        # directly: both `npx cdk` and `npm exec -- cdk` exited 0 on the
+        # runner in ~2s with no output and no deploy (even `--version`
+        # printed nothing). A direct node invocation can't be swallowed by
+        # npm's exec layers — if the file is missing it errors, if it runs
+        # it prints. Require recognizable cdk completion output so a silent
+        # no-op can never report success again.
         run: |
           set -euo pipefail
           npm ci
           npm run build
-          npm exec --no -- cdk --version
-          npm exec --no -- cdk deploy CdkStack --require-approval never --verbose
+          echo "node: $(node --version)  npm: $(npm --version)"
+          ls -la node_modules/.bin/cdk node_modules/aws-cdk/bin/cdk
+          node node_modules/aws-cdk/bin/cdk --version
+          node node_modules/aws-cdk/bin/cdk deploy CdkStack \
+          --require-approval never --verbose 2>&1 | tee /tmp/cdk-deploy.log
+          grep -qE 'no differences|✅|Total time|deployment time' /tmp/cdk-deploy.log || \
+          { echo "::error::cdk deploy produced no recognizable completion output"; exit 1; }
 
       - name: Verify deployed site
         run: |
