@@ -47,33 +47,37 @@ jobs:
           yarn install --frozen-lockfile --network-timeout 600000
           yarn build
 
-      - name: Build Lambda bundle
-        working-directory: deploy/cdk
-        run: |
-          npm ci
-          npm run build
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::451645558365:role/github-actions-role
           aws-region: us-east-1
 
-      - name: CDK deploy
+      - name: Build Lambda bundle and deploy CDK stack
         working-directory: deploy/cdk
         # bin/cdk.ts reads these env vars as a fallback to CDK context.
-        # Passing them via -c proved unreliable here (the context didn't
-        # reach the app process), so set them in the environment instead.
+        # Passing domain config via -c proved unreliable (the context
+        # didn't reach the app process), so set it in the environment.
+        # HostedZone.fromLookup also needs a concrete account/region on
+        # the stack — the CLI doesn't populate CDK_DEFAULT_ACCOUNT under
+        # the OIDC session, so set it explicitly (matches the pre-cached
+        # hosted-zone entry in cdk.context.json, so no live Route 53 call).
         env:
           YOPASS_DOMAIN_NAME: yopass.thelauerfam.com
           YOPASS_HOSTED_ZONE: thelauerfam.com
-          # HostedZone.fromLookup needs a concrete account/region on the
-          # stack. The CDK CLI doesn't populate CDK_DEFAULT_ACCOUNT under
-          # these OIDC creds, so set it explicitly; the hosted-zone lookup
-          # is already pre-cached in cdk.context.json for this account.
           CDK_DEFAULT_ACCOUNT: "451645558365"
           CDK_DEFAULT_REGION: us-east-1
-        run: npx cdk deploy CdkStack --require-approval never
+        # Build the Lambda bundle and deploy in one step so node_modules is
+        # guaranteed present, and invoke the local cdk binary directly: a
+        # bare `npx cdk` silently fell back to an unrelated `cdk` package
+        # and exited 0 without deploying. `npm exec --no` errors instead of
+        # fetching anything, and `--verbose` keeps the deploy auditable.
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+          npm exec --no -- cdk --version
+          npm exec --no -- cdk deploy CdkStack --require-approval never --verbose
 
       - name: Verify deployed site
         run: |
