@@ -63,9 +63,9 @@ jobs:
         working-directory: deploy/cdk
         run: |
           npx cdk deploy CdkStack \
-            --require-approval never \
-            -c domainName=yopass.thelauerfam.com \
-            -c hostedZoneName=thelauerfam.com
+          --require-approval never \
+          -c domainName=yopass.thelauerfam.com \
+          -c hostedZoneName=thelauerfam.com
 
       - name: Verify deployed site
         run: |
