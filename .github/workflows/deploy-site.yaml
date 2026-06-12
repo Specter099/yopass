@@ -67,6 +67,12 @@ jobs:
         env:
           YOPASS_DOMAIN_NAME: yopass.thelauerfam.com
           YOPASS_HOSTED_ZONE: thelauerfam.com
+          # HostedZone.fromLookup needs a concrete account/region on the
+          # stack. The CDK CLI doesn't populate CDK_DEFAULT_ACCOUNT under
+          # these OIDC creds, so set it explicitly; the hosted-zone lookup
+          # is already pre-cached in cdk.context.json for this account.
+          CDK_DEFAULT_ACCOUNT: "451645558365"
+          CDK_DEFAULT_REGION: us-east-1
         run: npx cdk deploy CdkStack --require-approval never
 
       - name: Verify deployed site
