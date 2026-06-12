@@ -1,4 +1,4 @@
-FROM golang:1.25-bookworm AS app
+FROM golang:1.26-bookworm AS app
 WORKDIR /yopass
 # Download modules first so the layer is cached across source changes.
 COPY go.mod go.sum ./
